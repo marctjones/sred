@@ -102,6 +102,35 @@ motions/bidi/IME, scroll-to-cursor for free.
 > re-derived from the source and pushed onto the buffer as per-line attrs after
 > each edit. That's the part that makes sred a *markdown* editor, not a plain box.
 
+### 3.1a Strip-and-replace audit (stop maintaining our own)
+
+Concrete map of what we delete and what `cosmic-text` provides instead. The rule:
+**anything that is "generic text editor plumbing" is cosmic-text's; only
+markdown-specific behavior is ours.**
+
+| Our code (today) | Replace with cosmic-text | Verb |
+|---|---|---|
+| `ropey::Rope` buffer + `insert`/`delete` primitives | `Editor`-owned `Buffer` + `Action::Insert/Backspace/Delete`, `insert_string` | **strip** |
+| cursor/anchor state, `set_cursor`/`extend_to`/`select_word_at`, `selection_range` | `Editor` cursor + `Selection` + `Action::Click/DoubleClick/Drag{x,y}` | **strip** |
+| motions: `motion_target`, `word_range`, `Motion::LineStart/End`, `layout::vertical()` up/down hack | `Action::Motion(cosmic Motion::Left/Right/Up/Down/Home/End/LeftWord/RightWord/…)` (bidi + word + vertical correct) | **strip** |
+| pointer hit-testing: `layout::hit`, bridge `hit()` | `Action::Click/Drag{x,y}` (Editor maps px→cursor) | **strip** |
+| scrolling (the reverted manual viewport/`follow_scroll`) | `Action::Scroll{lines}` + `Buffer::shape_until_cursor` (scroll-to-cursor) | **strip** |
+| flat↔cursor mapping (`linecol`/`flat_of`/`flat_to_render_cursor`/`render_cursor_to_flat`) + `prefix_bytes` | obsolete — source-anchored has no injected prefixes; the cursor *is* a cosmic `Cursor` | **strip** |
+| manual selection-highlight fill + `caret_geom` drawing | `Editor::draw(text, cursor, selection, selected_text colors, F)` draws glyphs + cursor + selection in one pass | **strip** |
+| undo/redo full-text `Snapshot` vecs | `Editor::start_change`/`finish_change` → `Change` (delta) stack | **strip** |
+| `text()` = `rope.to_string()` | reconstruct from `Buffer.lines` (`text()` + `ending().as_str()`), empty guard | **adapt** |
+| clipboard editing half (`selected_text`, delete) | `Editor::copy_selection()` / `delete_selection()` (OS transport still `arboard`) | **adapt** |
+| `view.rs` markdown scanner → `Vec<Span>` for `set_rich_text` | keep the scanner, but emit **per-line `AttrsList`** applied via `BufferLine::set_attrs_list` (restyle without changing text) | **keep, adapt** |
+| decoration draw (strike/underline) via `LayoutRun::highlight` | keep (cosmic draws neither) | **keep** |
+| source transforms (bold→`**…**`, headings/list markers, link wrap, Enter list-continue/exit) | keep — markdown semantics, expressed via `Editor` insert/delete actions | **keep** |
+| extension tokens / block widgets (todo checkbox, chips) | keep — ours (future) | **keep** |
+| rasterize to `slint::Image` + Slint component/bridge | keep — Slint can't consume an `Editor` | **keep** |
+
+Net: `editor.rs` collapses from a ~640-line hand-rolled engine to a thin wrapper
+(`Editor` + a `Change` undo stack + our source-transform helpers); `layout.rs`
+loses the flat-mapping (~80 lines) and the manual selection/caret raster (~40
+lines). We stop maintaining cursor/selection/motion/scroll/undo entirely.
+
 ### 3.2 View builder (parse → decorations)
 - An **incremental block + inline scanner** (reuse Noet's lightweight block
   rules where sensible; do *not* pull in a heavyweight AST) maps source spans to:

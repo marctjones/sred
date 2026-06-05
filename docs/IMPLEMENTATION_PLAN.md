@@ -42,20 +42,41 @@ shapes; their *implementation* changes).
 
 ---
 
-## M2 — Scrolling & viewport 
+## M2 — Adopt cosmic-text's `Editor` substrate (scrolling falls out)
 
-1. **Viewport state** in the bridge: scroll-y, visible height. *(slint)*
-2. **cosmic-text viewport**: pass scroll + visible height to the buffer; only
-   shape/raster the visible line range; pad scrollbar via total height.
-   *(core/src/layout.rs — use `Buffer::set_scroll` / shape-until-scroll bounds)*
-3. **Caret-follow**: after an edit/caret move, adjust scroll-y so the caret rect
-   is within the viewport. *(slint bridge + a `caret_rect` already returned)*
-4. **Wheel + drag coexistence**: keep the `Flickable` non-interactive for
-   selection; handle wheel via a `scroll-event` callback that adjusts scroll-y.
-   *(slint ui/sred.slint + bridge)*
+Replaces the hand-rolled engine per the strip-and-replace audit (`DESIGN.md`
+§3.1a). Do it behind the existing `EditorCore` public surface so the bridge
+barely changes.
 
-**Gate:** 5k-line note scroll test (headless: set text, move caret to end, assert
-caret rect within viewport); latency micro-bench flat vs length.
+1. **Editor-backed core** *(core/src/editor.rs)*: hold a `cosmic_text::Editor`
+   (owned `Buffer`) + `format` + a `Vec<Change>` undo stack. Implement:
+   - `text()` → reconstruct from `buffer.lines` (`text()`+`ending()`), empty guard;
+   - `set_text()` → `Buffer::set_text`;
+   - `apply(Command)` → translate to `Action`s: `Insert/Backspace/Delete`,
+     `Motion(..)`, `Click/DoubleClick/Drag`, `Scroll`, `SelectAll` (set selection),
+     copy/cut/paste via `copy_selection`/`delete_selection`/`insert_string`.
+   - undo: wrap mutating commands in `start_change`/`finish_change`, push the
+     `Change`; `Undo`/`Redo` apply/reverse from the stacks (coalesce by not
+     finishing a change mid-word).
+   - **Keep** the markdown source-transforms (bold wrap, block markers, link,
+     Enter list-continue/exit) — now built from `Editor` insert/delete on the
+     buffer text.
+2. **Restyle layer** *(core/src/view.rs + layout.rs)*: after each edit, scan the
+   (visible) lines and set each `BufferLine`'s `AttrsList` (markdown → attrs)
+   via `set_attrs_list` — no text mutation. Delete `styled_runs`'s span-vector
+   path and `prefix_bytes`.
+3. **Render** *(core/src/layout.rs)*: replace manual selection/caret with
+   `Editor::draw(text, cursor, selection, selected_text colors, F)` into our
+   RGBA; keep decoration (strike/underline) drawing on top; keep rasterize→Image.
+   Delete `caret_geom`, the selection loop, and the flat↔cursor mapping.
+4. **Scroll**: `Action::Scroll{lines}` from the wheel; `shape_until_cursor` for
+   caret-follow. Viewport height from the widget.
+5. **Bridge** *(slint)*: pointer events → `Action::Click/Drag`; keys → motions/
+   insert; wheel → `Scroll`. Delete the bridge's `hit()`/`vertical()` plumbing.
+
+**Gate:** `tests/fidelity.rs` stays green (byte-lossless through the swap);
+5k-line scroll + caret-follow works; GUI test (type → bold → assert text) green;
+drag-select + double-click-word via `Editor` verified headless.
 
 ---
 

@@ -32,15 +32,22 @@ toolbar, autoformat) splices the raw text — markers are real (`**…**`, `# `,
 
 ---
 
-## M2 — Scrolling & viewport
-Re-enable scrolling without breaking drag-select: caret-follow auto-scroll,
-mouse-wheel, and viewport-bounded shaping/raster (only render the visible range
-of long notes).
+## M2 — Adopt cosmic-text's `Editor` substrate (brings scrolling for free)
+Reshaped after the cosmic-text investigation (see `DESIGN.md` §3.1): instead of
+hand-rolling a viewport/scroll, **replace the editing engine with cosmic-text's
+`Editor`** (cursor, selection, motions via `Action`, scroll/scroll-to-cursor,
+clipboard, IME, `draw`-with-selection). Reconstruct byte-exact text from
+`lines + endings` (proven lossless by `tests/cosmic_fidelity_spike.rs`, empty-
+buffer guard). Keep undo via plain `Editor` + a `Change` stack (no `ViEditor`
+vim modes). sred's `view.rs` re-applies markdown styling as per-line attrs after
+each edit. This *subsumes* the old "scrolling & viewport" milestone and deletes
+the hand-rolled cursor/selection/motion/scroll code.
 
 **Acceptance**
-- A 5,000-line note scrolls by wheel and keeps the caret on-screen while typing.
-- Drag-selection still works (no Flickable/selection conflict).
-- Per-keystroke latency stays flat as document length grows (viewport-bounded).
+- `tests/fidelity.rs` stays green through the substrate swap (byte-lossless).
+- Scrolling (wheel + caret-follow) works on a 5,000-line note; latency bounded.
+- Drag-selection + word/line motions come from `Editor` and still pass the GUI
+  test.
 
 ---
 
