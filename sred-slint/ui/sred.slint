@@ -18,7 +18,11 @@ export component RichTextEditor inherits Rectangle {
     callback pointer-down(length, length);
     callback pointer-drag(length, length);
     callback pointer-double(length, length);
-    callback resized(length);
+    callback resized(length, length);
+
+    // Vertical scroll offset (px from top); driven by the wheel, the scrollbar,
+    // and caret-follow autoscroll from Rust.
+    in-out property <length> scroll-y;
 
     // Pointer-press origin + a small drag threshold so a plain click never
     // creates a stray 1-character selection.
@@ -61,6 +65,10 @@ export component RichTextEditor inherits Rectangle {
             interactive: false;
             viewport-height: root.doc-height;
             viewport-width: self.width;
+            viewport-y: -root.scroll-y;
+            changed width => { root.resized(self.width, self.height); }
+            changed height => { root.resized(self.width, self.height); }
+            init => { root.resized(self.width, self.height); }
 
             img := Image {
                 x: 0;
@@ -69,13 +77,16 @@ export component RichTextEditor inherits Rectangle {
                 height: root.doc-height;
                 source: root.frame;
                 image-fit: ImageFit.fill;
-                changed width => { root.resized(self.width); }
-                init => { root.resized(self.width); }
             }
 
             TouchArea {
                 width: flick.width;
                 height: root.doc-height;
+                scroll-event(e) => {
+                    root.scroll-y = max(0px, min(root.scroll-y - e.delta-y,
+                                                 max(0px, root.doc-height - flick.height)));
+                    return EventResult.accept;
+                }
                 pointer-event(e) => {
                     if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
                         scope.focus();
@@ -107,6 +118,39 @@ export component RichTextEditor inherits Rectangle {
                 height: root.caret-h;
                 background: #1166dd;
                 visible: root.caret-on && scope.has-focus;
+            }
+        }
+
+        // Vertical scrollbar (shown only when the doc is taller than the view).
+        Rectangle {
+            visible: root.doc-height > flick.height;
+            x: parent.width - 11px;
+            y: 2px;
+            width: 9px;
+            height: flick.height - 4px;
+            background: transparent;
+            thumb := Rectangle {
+                width: 7px;
+                x: 1px;
+                height: max(28px, flick.height * flick.height / max(1px, root.doc-height));
+                y: (parent.height - self.height)
+                   * (root.scroll-y / max(1px, root.doc-height - flick.height));
+                border-radius: 3px;
+                background: sbar.pressed ? #8a8a8a : (sbar.has-hover ? #a8a8a8 : #c4c4c4);
+            }
+            sbar := TouchArea {
+                moved => {
+                    if (self.pressed) {
+                        root.scroll-y = max(0px, min(
+                            self.mouse-y / parent.height * root.doc-height - flick.height / 2,
+                            max(0px, root.doc-height - flick.height)));
+                    }
+                }
+                clicked => {
+                    root.scroll-y = max(0px, min(
+                        self.mouse-y / parent.height * root.doc-height - flick.height / 2,
+                        max(0px, root.doc-height - flick.height)));
+                }
             }
         }
     }
@@ -155,6 +199,7 @@ export component MainWindow inherits Window {
     in property <length> caret-y <=> editor.caret-y;
     in property <length> caret-h <=> editor.caret-h;
     in property <bool> caret-on <=> editor.caret-on;
+    in-out property <length> scroll-y <=> editor.scroll-y;
     in property <string> source-text;
     in property <[string]> formats: ["markdown", "typst"];
 

@@ -63,16 +63,28 @@ pub fn styled_runs(
         }
 
         let is_fence = line.trim_start().starts_with("```");
-        let line_is_code = in_fence || is_fence;
+        let interior = in_fence && !is_fence; // a code-content line (not a delimiter)
         if is_fence {
             in_fence = !in_fence;
         }
+        let on_caret = li == caret_line;
 
-        // Caret-aware Live Preview: reveal raw markers on the caret line (and on
-        // code/paragraph lines), hide/substitute them elsewhere.
-        let reveal = li == caret_line || line_is_code;
-        let (display, delta, size, extra) = project_line(line, base, reveal, line_is_code);
+        // Caret-aware Live Preview: hide ``` fences off the caret line (the code
+        // block renders without the delimiters); code content shows as-is;
+        // markdown lines hide/substitute their block markers off the caret line.
+        let (display, delta, size, extra) = if is_fence {
+            if on_caret {
+                (line.to_string(), 0, base, MarkSet::CODE)
+            } else {
+                (String::new(), -(line.len() as i32), base, MarkSet::CODE)
+            }
+        } else if interior {
+            (line.to_string(), 0, base, MarkSet::CODE)
+        } else {
+            project_line(line, base, on_caret, false)
+        };
         deltas.push(delta);
+        let line_is_code = is_fence || interior;
         let display: &str = &display;
 
         let chars: Vec<char> = display.chars().collect();

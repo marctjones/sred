@@ -16,6 +16,7 @@ struct Controller {
     core: EditorCore,
     renderer: TextRenderer,
     width: u32,
+    viewport_h: f32,
     clipboard: Option<arboard::Clipboard>,
 }
 
@@ -25,6 +26,7 @@ impl Controller {
             core: EditorCore::from_source(src, format),
             renderer: TextRenderer::new(),
             width: 820,
+            viewport_h: 400.0,
             clipboard: arboard::Clipboard::new().ok(),
         }
     }
@@ -313,15 +315,16 @@ fn build_window(initial: &str, format: Format) -> Result<MainWindow, slint::Plat
     {
         let w = window.as_weak();
         let ctl = ctl.clone();
-        window.on_resized(move |width| {
+        window.on_resized(move |width, height| {
             let px = width.max(0.0) as u32;
             if px < 80 {
                 return;
             }
             let changed = {
                 let mut c = ctl.borrow_mut();
-                let changed = c.width != px;
+                let changed = c.width != px || (c.viewport_h - height).abs() > 0.5;
                 c.width = px;
+                c.viewport_h = height.max(1.0);
                 changed
             };
             if changed {
@@ -402,6 +405,18 @@ fn refresh(window: &MainWindow, ctl: &Rc<RefCell<Controller>>) {
     window.set_caret_h(out.caret.h);
     // Keep the caret visible even while a selection is active so it never "disappears".
     window.set_caret_on(true);
+
+    // Caret-follow autoscroll: nudge scroll-y so the caret stays in view.
+    let vp_h = c.viewport_h;
+    let doc_h = out.frame.height as f32;
+    let max_scroll = (doc_h - vp_h).max(0.0);
+    let mut scroll = window.get_scroll_y().clamp(0.0, max_scroll);
+    if out.caret.y < scroll {
+        scroll = out.caret.y;
+    } else if out.caret.y + out.caret.h > scroll + vp_h {
+        scroll = out.caret.y + out.caret.h - vp_h;
+    }
+    window.set_scroll_y(scroll.clamp(0.0, max_scroll));
     window.set_source_text(c.core.source().into());
     // Show the URL of the link under the caret (if any) in the toolbar field.
     window.set_link_url(c.core.link_at_cursor().unwrap_or_default().into());
