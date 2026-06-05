@@ -69,13 +69,38 @@ regions stay byte-identical by construction, and edits produce minimal diffs.
         └───────────────────────────────────────────────────────────────┘
 ```
 
-### 3.1 Source buffer (new source of truth)
-- The buffer is the **raw markdown `String`** (backed by a `ropey::Rope` for
-  large notes). `text()` returns it verbatim. `set_text()` replaces it.
-- The caret/selection are **byte/char offsets into the raw text**.
-- All edits — typing, delete, toolbar actions, autoformat — **splice the raw
-  text**. "Bold" wraps the selection with literal `**…**`; "H1" inserts `# ` at
-  line start; a bullet inserts `- `. The markers are really in the text.
+### 3.1 Editing substrate: lean on cosmic-text's `Edit`/`Editor`
+
+We already depend on cosmic-text for shaping/layout/raster. It *also* ships a
+full editing layer (`Edit` trait, `Editor`, `ViEditor`, `SyntaxEditor`) that
+owns a `Buffer` and provides cursor, selection, motions (`Action`), scroll,
+clipboard copy/delete, IME, "draw with cursor + selection," and undo/redo
+(`ViEditor` via `cosmic-undo-2`). **Rather than reinvent those, the editing
+substrate is cosmic-text's `Editor`** — less code, better-tested
+motions/bidi/IME, scroll-to-cursor for free.
+
+- **The buffer is cosmic-text's `Buffer`** (owned by an `Editor`) — *not* a
+  custom `ropey` rope. The buffer text *is* the raw markdown.
+- **Byte-lossless, proven.** cosmic-text tracks a per-line `LineEnding`
+  (Lf/CrLf/Cr/…). `text()` reconstructs from `lines + endings`; an empirical
+  spike (`tests/cosmic_fidelity_spike.rs`) confirms byte-for-byte round-trips
+  across the corpus (CRLF, trailing whitespace, blank runs, unicode, todo lines,
+  code fences). The one edge — an empty buffer reads back as `"\n"` — is a
+  one-line guard. `tests/fidelity.rs` stays the gate.
+- **All edits go through `Editor` actions** (insert/delete/motion/selection),
+  which splice the buffer text. Toolbar source-transforms ("Bold" → wrap with
+  `**…**`, "H1" → insert `# `) are expressed as insert/delete actions, so the
+  markers are really in the text.
+- This **supersedes M1's interim `ropey` buffer** (a correct stepping stone that
+  proved the source-anchored model). M1's conceptual win — *source-anchored,
+  byte-lossless* — stands; only the storage moves to cosmic-text.
+
+> **What stays ours (and always will):** cosmic-text knows nothing about
+> markdown. The *markdown → visual styling* (headings, bold, chips), the
+> *decorations* (strike/underline), the *extension tokens* (wikilinks/tags), the
+> *block widgets* (todo checkbox), and *byte-exact text in/out* are sred's job —
+> re-derived from the source and pushed onto the buffer as per-line attrs after
+> each edit. That's the part that makes sred a *markdown* editor, not a plain box.
 
 ### 3.2 View builder (parse → decorations)
 - An **incremental block + inline scanner** (reuse Noet's lightweight block
