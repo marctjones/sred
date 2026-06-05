@@ -123,7 +123,7 @@ impl TextRenderer {
         &mut self,
         spans: &[Span],
         text: &str,
-        prefix_bytes: &[usize],
+        deltas: &[i32],
         decorations: &[(usize, usize, Decoration)],
         width: u32,
         theme: &Theme,
@@ -140,8 +140,8 @@ impl TextRenderer {
 
         if let Some((s, e)) = selection {
             if s != e {
-                let cs = flat_to_render_cursor(text, prefix_bytes, s);
-                let ce = flat_to_render_cursor(text, prefix_bytes, e);
+                let cs = flat_to_render_cursor(text, deltas, s);
+                let ce = flat_to_render_cursor(text, deltas, e);
                 for run in buffer.layout_runs() {
                     if let Some((x, w)) = run.highlight(cs, ce) {
                         fill_rect(
@@ -180,8 +180,8 @@ impl TextRenderer {
             if s >= e {
                 continue;
             }
-            let cs = flat_to_render_cursor(text, prefix_bytes, s);
-            let ce = flat_to_render_cursor(text, prefix_bytes, e);
+            let cs = flat_to_render_cursor(text, deltas, s);
+            let ce = flat_to_render_cursor(text, deltas, e);
             for run in buffer.layout_runs() {
                 if let Some((x, w)) = run.highlight(cs, ce) {
                     if w <= 0.0 {
@@ -206,7 +206,7 @@ impl TextRenderer {
             }
         }
 
-        let mut caret = self.caret_geom(&buffer, text, prefix_bytes, cursor, theme);
+        let mut caret = self.caret_geom(&buffer, text, deltas, cursor, theme);
         caret.x += theme.margin_x;
         caret.y += theme.margin_y;
         RenderOut {
@@ -223,11 +223,11 @@ impl TextRenderer {
         &self,
         buffer: &Buffer,
         text: &str,
-        prefix_bytes: &[usize],
+        deltas: &[i32],
         cursor: usize,
         theme: &Theme,
     ) -> Caret {
-        let c = flat_to_render_cursor(text, prefix_bytes, cursor);
+        let c = flat_to_render_cursor(text, deltas, cursor);
         let mut last_bottom = 0.0;
         for run in buffer.layout_runs() {
             if run.line_i == c.line {
@@ -254,7 +254,7 @@ impl TextRenderer {
         &mut self,
         spans: &[Span],
         text: &str,
-        prefix_bytes: &[usize],
+        deltas: &[i32],
         width: u32,
         theme: &Theme,
         x: f32,
@@ -264,7 +264,7 @@ impl TextRenderer {
         let bx = (x - theme.margin_x).max(0.0);
         let by = (y - theme.margin_y).max(0.0);
         match buffer.hit(bx, by) {
-            Some(cursor) => render_cursor_to_flat(text, prefix_bytes, cursor),
+            Some(cursor) => render_cursor_to_flat(text, deltas, cursor),
             None => text.chars().count(),
         }
     }
@@ -273,21 +273,21 @@ impl TextRenderer {
         &mut self,
         spans: &[Span],
         text: &str,
-        prefix_bytes: &[usize],
+        deltas: &[i32],
         width: u32,
         theme: &Theme,
         cursor: usize,
         down: bool,
     ) -> usize {
         let buffer = self.build_buffer(spans, width as f32, theme);
-        let caret = self.caret_geom(&buffer, text, prefix_bytes, cursor, theme);
+        let caret = self.caret_geom(&buffer, text, deltas, cursor, theme);
         let target_y = if down {
             caret.y + caret.h * 1.5
         } else {
             caret.y - caret.h * 0.5
         };
         match buffer.hit(caret.x, target_y.max(0.0)) {
-            Some(c) => render_cursor_to_flat(text, prefix_bytes, c),
+            Some(c) => render_cursor_to_flat(text, deltas, c),
             None => cursor,
         }
     }
@@ -339,16 +339,19 @@ fn flat_of(text: &str, target_line: usize, target_byte: usize) -> usize {
     chars
 }
 
-fn flat_to_render_cursor(text: &str, prefix_bytes: &[usize], char_idx: usize) -> Cursor {
+/// Source (line, byte) → display Cursor: `display_byte = src_byte + delta`.
+fn flat_to_render_cursor(text: &str, deltas: &[i32], char_idx: usize) -> Cursor {
     let (line, byte) = linecol(text, char_idx);
-    let pb = prefix_bytes.get(line).copied().unwrap_or(0);
-    Cursor::new(line, pb + byte)
+    let d = deltas.get(line).copied().unwrap_or(0);
+    let display_byte = (byte as i32 + d).max(0) as usize;
+    Cursor::new(line, display_byte)
 }
 
-fn render_cursor_to_flat(text: &str, prefix_bytes: &[usize], cursor: Cursor) -> usize {
-    let pb = prefix_bytes.get(cursor.line).copied().unwrap_or(0);
-    let editable_byte = cursor.index.saturating_sub(pb);
-    flat_of(text, cursor.line, editable_byte)
+/// Display Cursor → source char index: `src_byte = display_byte − delta`.
+fn render_cursor_to_flat(text: &str, deltas: &[i32], cursor: Cursor) -> usize {
+    let d = deltas.get(cursor.line).copied().unwrap_or(0);
+    let src_byte = (cursor.index as i32 - d).max(0) as usize;
+    flat_of(text, cursor.line, src_byte)
 }
 
 // ---- raster helpers --------------------------------------------------------
@@ -430,13 +433,20 @@ mod tests {
     }
 
     #[test]
-    fn prefix_offsets_cursor() {
-        // line 1 (the bullet) has a 5-byte prefix "•  " (• = 3 bytes + 2 spaces)
-        let text = "title\nitem";
-        let prefix_bytes = vec![0usize, 5];
-        let c = flat_to_render_cursor(text, &prefix_bytes, 6); // start of "item"
-        assert_eq!(c.line, 1);
-        assert_eq!(c.index, 5); // shifted past the prefix
-        assert_eq!(render_cursor_to_flat(text, &prefix_bytes, c), 6);
+    fn signed_delta_maps_both_ways() {
+        // line 0: a hidden heading "## " → display shorter by 3 (delta −3)
+        // line 1: a hidden bullet "- " → display "• " longer by 2 (delta +2)
+        let text = "## Title\n- item";
+        let deltas = vec![-3i32, 2];
+        // source cursor at the 'T' of Title (char index 3) → display byte 0
+        let c0 = flat_to_render_cursor(text, &deltas, 3);
+        assert_eq!((c0.line, c0.index), (0, 0));
+        assert_eq!(render_cursor_to_flat(text, &deltas, c0), 3);
+        // source cursor at the 'i' of item (char index 9+2=... ) → display byte +2
+        let item_i = "## Title\n- ".chars().count(); // start of "item"
+        let c1 = flat_to_render_cursor(text, &deltas, item_i);
+        assert_eq!(c1.line, 1);
+        assert_eq!(c1.index, 4); // "- " src byte 2 + delta 2 = display byte 4 ("• ")
+        assert_eq!(render_cursor_to_flat(text, &deltas, c1), item_i);
     }
 }

@@ -37,11 +37,19 @@ pub enum Decoration {
 
 /// Build styled layout runs + per-line prefix bytes (always 0 here — markers are
 /// real text, nothing is injected).
-pub fn styled_runs(text: &str, _format: Format, base: f32) -> (Vec<Span>, Vec<usize>) {
+pub fn styled_runs(
+    text: &str,
+    _format: Format,
+    base: f32,
+    caret_line: usize,
+) -> (Vec<Span>, Vec<i32>) {
     let lines: Vec<&str> = text.split('\n').collect();
     let highlights = code_highlights(text);
     let mut spans = Vec::new();
-    let mut prefix_bytes = Vec::with_capacity(lines.len());
+    // Per-line byte delta: (display leading bytes) − (source leading bytes).
+    // 0 on the caret line and on paragraphs/code; negative where a marker is
+    // hidden (headings/quotes); positive where a bullet glyph replaces "- ".
+    let mut deltas: Vec<i32> = Vec::with_capacity(lines.len());
     let mut in_fence = false;
 
     for (li, line) in lines.iter().enumerate() {
@@ -53,24 +61,25 @@ pub fn styled_runs(text: &str, _format: Format, base: f32) -> (Vec<Span>, Vec<us
                 size: base,
             });
         }
-        prefix_bytes.push(0);
 
         let is_fence = line.trim_start().starts_with("```");
         let line_is_code = in_fence || is_fence;
-        let (size, extra) = if line_is_code {
-            (base, MarkSet::CODE)
-        } else {
-            heading_style(line, base)
-        };
         if is_fence {
             in_fence = !in_fence;
         }
 
-        let chars: Vec<char> = line.chars().collect();
+        // Caret-aware Live Preview: reveal raw markers on the caret line (and on
+        // code/paragraph lines), hide/substitute them elsewhere.
+        let reveal = li == caret_line || line_is_code;
+        let (display, delta, size, extra) = project_line(line, base, reveal, line_is_code);
+        deltas.push(delta);
+        let display: &str = &display;
+
+        let chars: Vec<char> = display.chars().collect();
         let charmarks: Vec<MarkSet> = if line_is_code {
             vec![MarkSet::CODE; chars.len()]
         } else {
-            let mut m = line_marks(line);
+            let mut m = line_marks(display);
             for x in &mut m {
                 *x |= extra;
             }
@@ -101,7 +110,44 @@ pub fn styled_runs(text: &str, _format: Format, base: f32) -> (Vec<Span>, Vec<us
         }
     }
 
-    (spans, prefix_bytes)
+    (spans, deltas)
+}
+
+/// Project a source line to its displayed form. On a revealed line (caret line /
+/// code / paragraph) the display equals the source. Otherwise leading block
+/// markers are hidden (headings/quotes) or substituted (bullets → "• "), and the
+/// returned delta is `display_leading_bytes − source_leading_bytes`.
+fn project_line(line: &str, base: f32, reveal: bool, line_is_code: bool) -> (String, i32, f32, MarkSet) {
+    if line_is_code {
+        return (line.to_string(), 0, base, MarkSet::CODE);
+    }
+    let (size, extra) = heading_style(line, base);
+    if reveal {
+        return (line.to_string(), 0, size, extra);
+    }
+    // hidden line: project the leading marker
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    if (1..=6).contains(&hashes) && line[hashes..].starts_with(' ') {
+        let m = hashes + 1; // "### "
+        return (line[m..].to_string(), -(m as i32), size, extra);
+    }
+    if let Some(rest) = line.strip_prefix("> ") {
+        return (rest.to_string(), -2, base, MarkSet::empty());
+    }
+    const BULLET: &str = "• "; // U+2022 + space = 4 bytes
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = line.strip_prefix(marker) {
+            let display = format!("{BULLET}{rest}");
+            let delta = BULLET.len() as i32 - marker.len() as i32; // 4 − 2 = +2
+            return (display, delta, base, MarkSet::empty());
+        }
+    }
+    let digits = line.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits > 0 && line[digits..].starts_with(". ") {
+        // keep numbered markers visible (they carry meaning); no projection
+        return (line.to_string(), 0, base, MarkSet::empty());
+    }
+    (line.to_string(), 0, base, MarkSet::empty())
 }
 
 fn line_code_colors(

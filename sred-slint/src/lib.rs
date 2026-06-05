@@ -169,7 +169,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let initial = "# Welcome to sred\n\nA *rich text* editor with **markdown** and \
                    `typst` backends, rendered through Slint.\n\nDrag to select, then \
                    use the toolbar, menu, or Ctrl-B / Ctrl-I. Ctrl-C / X / V copy, cut, \
-                   paste.\n";
+                   paste.\n\n```rust\nfn main() {\n    let greeting = \"hello\";\n    \
+                   println!(\"{greeting}, world\");  // syntect highlighting\n}\n```\n";
     let window = build_window(initial, Format::Markdown)?;
     window.run()
 }
