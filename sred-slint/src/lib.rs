@@ -406,15 +406,18 @@ fn refresh(window: &MainWindow, ctl: &Rc<RefCell<Controller>>) {
     // Keep the caret visible even while a selection is active so it never "disappears".
     window.set_caret_on(true);
 
-    // Caret-follow autoscroll: nudge scroll-y so the caret stays in view.
+    // Caret-follow autoscroll: keep the caret line within a "scroll-off" pad of
+    // both edges so the top/bottom line is never jammed against the border. When
+    // at the document ends, clamping reveals the full top/bottom margin.
     let vp_h = c.viewport_h;
     let doc_h = out.frame.height as f32;
     let max_scroll = (doc_h - vp_h).max(0.0);
+    let pad = out.caret.h.min(vp_h * 0.3);
     let mut scroll = window.get_scroll_y().clamp(0.0, max_scroll);
-    if out.caret.y < scroll {
-        scroll = out.caret.y;
-    } else if out.caret.y + out.caret.h > scroll + vp_h {
-        scroll = out.caret.y + out.caret.h - vp_h;
+    if out.caret.y - pad < scroll {
+        scroll = out.caret.y - pad;
+    } else if out.caret.y + out.caret.h + pad > scroll + vp_h {
+        scroll = out.caret.y + out.caret.h + pad - vp_h;
     }
     window.set_scroll_y(scroll.clamp(0.0, max_scroll));
     window.set_source_text(c.core.source().into());

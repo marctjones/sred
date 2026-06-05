@@ -34,8 +34,8 @@ impl Default for Theme {
         Theme {
             font_size: 18.0,
             line_height: 26.0,
-            margin_x: 10.0,
-            margin_y: 8.0,
+            margin_x: 16.0,
+            margin_y: 16.0,
             fg: [33, 33, 33, 255],
             bg: [253, 253, 250, 255],
             link: [30, 100, 220, 255],
