@@ -1,4 +1,4 @@
-# sred — Implementation Plan (0.1.0 → 0.3.0)
+# sred — Implementation Plan (0.1.0 → 0.2.0)
 
 Task-level breakdown per milestone from `ROADMAP.md`. Each task notes the files
 touched and the tests that gate it. "core" = `sred-core`, "slint" = `sred-slint`,
@@ -6,7 +6,7 @@ touched and the tests that gate it. "core" = `sred-core`, "slint" = `sred-slint`
 
 ---
 
-## M1 — Source-anchored core (`0.2.0`)
+## M1 — Source-anchored core 
 
 The pivot. Build it behind the existing `EditorCore` public surface so the Slint
 layer barely changes (`styled_runs`, `apply`, `text`, `selection` keep their
@@ -42,7 +42,7 @@ shapes; their *implementation* changes).
 
 ---
 
-## M2 — Scrolling & viewport (`0.2.1`)
+## M2 — Scrolling & viewport 
 
 1. **Viewport state** in the bridge: scroll-y, visible height. *(slint)*
 2. **cosmic-text viewport**: pass scroll + visible height to the buffer; only
@@ -59,7 +59,7 @@ caret rect within viewport); latency micro-bench flat vs length.
 
 ---
 
-## M3 — Theming & scale hooks (`0.2.2`)
+## M3 — Theming & scale hooks 
 
 1. **Theme inputs** on `RichTextEditor`: `fg,bg,accent,selection,code,link` as
    `color` props, `scale: float`, `dark: bool`. *(slint ui)*
@@ -72,7 +72,7 @@ and caret height tracks scale.
 
 ---
 
-## M4 — Embeddable component + version alignment (`0.2.3`)
+## M4 — Embeddable component + version alignment 
 
 1. **Version pin**: workspace `slint = "1.13"`, `slint-build = "1.13"`,
    `i-slint-backend-testing = "1.13"`; fix any 1.16-only usage. *(Cargo.toml)*
@@ -93,7 +93,7 @@ clean.
 
 ---
 
-## M5 — Inline-token extension API (`0.2.4`)
+## M5 — Inline-token extension API 
 
 1. **`TokenSpec`** in core: `{ id, matcher: Matcher, style: TokenStyle,
    clickable }`, `Matcher = Regex(String) | Fn`. A registry on `EditorCore`.
@@ -111,7 +111,7 @@ chip span exists and a simulated click reports the value; `**bold**` still style
 
 ---
 
-## M6 — Block-widget hooks + todo affordance (`0.2.5`)
+## M6 — Block-widget hooks + todo affordance 
 
 1. **`BlockWidgetSpec`** `{ id, line_matcher: Fn(&str)->Option<State>, on_action }`
    registry. *(core)*
@@ -127,7 +127,7 @@ source bytes unchanged.
 
 ---
 
-## M7 — Accessibility & headless-test parity (`0.2.6`)
+## M7 — Accessibility & headless-test parity 
 
 1. **A11y**: set `accessible-role: text-editor`/`accessible-label` on the editor
    surface. *(slint ui)*
@@ -141,7 +141,7 @@ simulated input, asserts `text()`.
 
 ---
 
-## M8 — Integration hardening in Noet (`0.3.0`, release gate) — work in `notes`
+## M8 — Integration hardening in Noet (`0.2.0`, release gate) — work in `notes`
 
 1. **Depend on sred**: add `sred-core`/`sred-slint` to `notes` workspace; import
    `RichTextEditor` into `app.slint`.

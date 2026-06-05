@@ -5,16 +5,16 @@ reusable Slint component. The hard parts (document model, text shaping, cursor,
 hit-testing, backends) live in UI-free Rust; Slint is a thin render + input
 surface.
 
-> ### 🎯 Release target — **0.3.0: usable as [Noet](../notes)'s primary editor**
+> ### 🎯 Release target — **0.2.0: usable as [Noet](../notes)'s primary editor**
 > sred is being driven toward replacing the raw-markdown editor in the Noet notes
 > app. That requires a pivot to **byte-lossless, source-anchored editing** plus an
 > extension API for domain tokens, theming, and scrolling. The plan lives in:
 > - [`docs/DESIGN.md`](docs/DESIGN.md) — architecture, the source-anchored model, the extension API, sred↔Noet responsibility split.
-> - [`docs/ROADMAP.md`](docs/ROADMAP.md) — milestones M1–M8 (0.2.0 → 0.3.0) with acceptance gates.
+> - [`docs/ROADMAP.md`](docs/ROADMAP.md) — milestones M1–M8 toward 0.2.0 with acceptance gates.
 > - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — per-milestone task breakdown.
 >
 > The phased status below describes the **current 0.1.0** standalone editor; where
-> it conflicts with the docs above, the docs win for 0.3 work.
+> it conflicts with the docs above, the docs win for 0.2 work.
 
 ## Workspace
 
@@ -143,4 +143,4 @@ commercial Slint license and a separate arrangement for sred.
 
 - **v0.1.0** — standalone WYSIWYG editor: Markdown + Typst backends, block-aware
   inline editing, menu + toolbar, undo/redo, links/colors, 20 tests. Baseline
-  before the 0.3 source-anchored rewrite (see `docs/ROADMAP.md`).
+  before the 0.2 source-anchored rewrite (see `docs/ROADMAP.md`).

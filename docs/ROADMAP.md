@@ -1,18 +1,21 @@
-# sred — Roadmap to 0.3.0 ("primary editor for Noet")
+# sred — Roadmap to 0.2.0 ("primary editor for Noet")
 
-**Release target — sred 0.3.0:** an embeddable, byte-lossless, themeable inline
+**Release target — sred 0.2.0:** an embeddable, byte-lossless, themeable inline
 markdown editor that Noet can use as its **primary** editing surface (replacing
 the raw-markdown `TextEdit`), with raw mode kept as a fallback.
 
 Current: **0.1.0** (standalone WYSIWYG demo; structured model with reconstructive
-save; 20 tests). The path to 0.3.0 is eight milestones. The keystone (M1) is an
-architecture pivot to a *source-anchored* buffer — see `DESIGN.md` §2.
+save; 20 tests). The path to 0.2.0 is eight internal milestones (M1–M8); only the
+final integration gate (M8) ships as the **0.2.0** release. The keystone (M1) is
+an architecture pivot to a *source-anchored* buffer — see `DESIGN.md` §2.
 
-Legend: each milestone bumps the version and has a hard **acceptance gate**.
+Legend: M1–M7 are development milestones (no public version); each has a hard
+**acceptance gate**. M8 is the 0.2.0 release gate. Intermediate builds may
+optionally be cut as `0.2.0-alpha.N`.
 
 ---
 
-## M1 — Source-anchored core · `0.2.0` · keystone
+## M1 — Source-anchored core · keystone
 Replace the structured `EditorCore` with a raw-markdown buffer (rope) as the
 source of truth; the rich view becomes a parsed projection. Editing (typing,
 toolbar, autoformat) splices the raw text — markers are real (`**…**`, `# `,
@@ -29,7 +32,7 @@ toolbar, autoformat) splices the raw text — markers are real (`**…**`, `# `,
 
 ---
 
-## M2 — Scrolling & viewport · `0.2.1`
+## M2 — Scrolling & viewport
 Re-enable scrolling without breaking drag-select: caret-follow auto-scroll,
 mouse-wheel, and viewport-bounded shaping/raster (only render the visible range
 of long notes).
@@ -41,7 +44,7 @@ of long notes).
 
 ---
 
-## M3 — Theming & scale hooks · `0.2.2`
+## M3 — Theming & scale hooks
 The editor takes its palette + font scale from the host instead of the hardcoded
 `layout::Theme`: `fg/bg/accent/selection/code/link` colors, `scale: float`,
 `dark: bool`, exposed as Slint properties read by the Rust renderer.
@@ -52,7 +55,7 @@ The editor takes its palette + font scale from the host instead of the hardcoded
 
 ---
 
-## M4 — Embeddable component + Slint-version alignment · `0.2.3`
+## M4 — Embeddable component + Slint-version alignment
 Extract a reusable `sred::Editor` binding that wires a `RichTextEditor` (no
 `MenuBar`) to an `EditorCore` and exposes the §4 API. Pin the sred workspace to
 **Slint 1.13** (Noet's version); move `MenuBar` to demo-only (in-window panel).
@@ -65,7 +68,7 @@ Publish a Slint library path so a host can `import { RichTextEditor } from "@sre
 
 ---
 
-## M5 — Inline-token extension API · `0.2.4`
+## M5 — Inline-token extension API
 Host-registered `TokenSpec { id, matcher, style, clickable }`. Built-in markdown
 emphasis/links route through the same decoration pipeline. Finalize
 `insert_text` / `selected_text` / `selection`.
@@ -78,7 +81,7 @@ emphasis/links route through the same decoration pipeline. Finalize
 
 ---
 
-## M6 — Block-widget hooks + todo affordance · `0.2.5`
+## M6 — Block-widget hooks + todo affordance
 Host-registered `BlockWidgetSpec` attaches an interactive widget to matching
 lines; sred reserves the slot, draws/hit-tests it, and emits `on_block_action`.
 Reference use: a checkbox on `TODO|DOING|DONE(kind) …` lines.
@@ -90,7 +93,7 @@ Reference use: a checkbox on `TODO|DOING|DONE(kind) …` lines.
 
 ---
 
-## M7 — Accessibility & headless-test parity · `0.2.6`
+## M7 — Accessibility & headless-test parity
 Add `accessible-role`/`accessible-label` to the editor surface; drive it via
 `i-slint-backend-testing` **1.13** `ElementHandle`/`mock_single_click`/
 `mock_elapsed_time`; port sred's GUI tests to that API and ship reusable test
@@ -102,7 +105,7 @@ helpers Noet can call.
 
 ---
 
-## M8 — Integration hardening in Noet (release gate) · `0.3.0`
+## M8 — Integration hardening in Noet (release gate) · 0.2.0
 Drop sred into Noet behind a `WYSIWYG (beta)` toggle next to `Preview`. Register
 Noet's tokens (`[[ ]]`,`+[[ ]]`,`@`,`#`,url, todo) with Theme colors and route
 clicks to `filter-entity`/`open-url`. Wire selection→Todo/Note, entity pickers

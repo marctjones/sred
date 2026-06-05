@@ -1,6 +1,6 @@
 # sred — Design (targeting use as Noet's primary editor)
 
-Status: design for **sred 0.3.0**. Supersedes the standalone-editor assumptions
+Status: design for **sred 0.2.0**. Supersedes the standalone-editor assumptions
 in the top-level `README.md` where they conflict.
 
 ## 1. Goal
@@ -44,7 +44,7 @@ document is the markdown string; parsing produces *decorations* and *inline
 widgets* layered over the source; editing splices the raw string. Unedited
 regions stay byte-identical by construction, and edits produce minimal diffs.
 
-## 3. Architecture (0.3 target)
+## 3. Architecture (0.2 target)
 
 ```
             ┌──────────────────────────────────────────────────────────┐
@@ -88,9 +88,9 @@ regions stay byte-identical by construction, and edits produce minimal diffs.
   - **block widgets** — host-registered line matchers producing an interactive
     widget slot (e.g. a checkbox on todo lines).
 - Decorations never rewrite text; they are an overlay keyed by source range.
-- **Marker visibility** is staged: 0.3 ships *visible markers, richly styled*
+- **Marker visibility** is staged: 0.2 ships *visible markers, richly styled*
   ("live-preview-lite" — `# `, `**` stay but headings are big and bold text is
-  bold, entities are chips). Hidden-marker reveal-on-caret is post-0.3 (§7).
+  bold, entities are chips). Hidden-marker reveal-on-caret is post-0.2 (§7).
 
 ### 3.3 Layout / raster
 - cosmic-text shapes the source text with per-run `Attrs` derived from
@@ -170,7 +170,7 @@ BlockWidgetSpec { id, line_matcher: fn(&str)->Option<State>, draw, on_action }
 
 - **Slint version.** Noet is on **1.13**; sred is on **1.16** and the demo uses
   `MenuBar` (1.16-only). The *reusable* component must build on Noet's version,
-  so 0.3 pins the sred workspace to **Slint 1.13** and moves `MenuBar` out of the
+  so 0.2 pins the sred workspace to **Slint 1.13** and moves `MenuBar` out of the
   reusable component (the demo uses an in-window panel, like Noet does). Keep the
   cosmic-text `set_rich_text` 5-arg call (that's a cosmic-text API, version-
   independent of Slint).
@@ -181,7 +181,7 @@ BlockWidgetSpec { id, line_matcher: fn(&str)->Option<State>, draw, on_action }
   representation; under the source-anchored model they become ephemeral (not
   saved) or are dropped. Not required by Noet.
 
-## 7. Beyond 0.3 (explicitly out of scope for the release gate)
+## 7. Beyond 0.2 (explicitly out of scope for the release gate)
 
 - Hidden-marker "true" Live Preview (reveal `**`/`#` only when the caret is on
   the construct).
