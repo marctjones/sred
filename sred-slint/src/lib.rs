@@ -521,14 +521,15 @@ mod tests {
             w2.get_source_text()
         );
 
-        // (3) Format switch reflects in the live source (Markdown → Typst).
+        // (3) Source-anchored invariant: switching the view format must NOT
+        // rewrite the source — the raw text is the buffer (byte-lossless).
         let w3 = build_window("# T", Format::Markdown).unwrap();
-        assert!(w3.get_source_text().starts_with("# T"));
+        assert_eq!(w3.get_source_text().as_str(), "# T");
         w3.invoke_format_changed("typst".into());
-        assert!(
-            w3.get_source_text().starts_with("= T"),
-            "format switch failed: {:?}",
-            w3.get_source_text()
+        assert_eq!(
+            w3.get_source_text().as_str(),
+            "# T",
+            "format switch must not mutate the source"
         );
     }
 }

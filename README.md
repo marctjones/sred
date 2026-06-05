@@ -98,22 +98,26 @@ manual via `cargo run -p sred-demo`.
       `Raw` chips, IME, rich/plain clipboard
 - [ ] **Phase 6** — multi-line block spacing, dirty-region re-raster, GPU glyph path
 
-## Known scaffold simplifications
+## 0.2 progress
 
-These are deliberate and documented in-code; the *architecture* already accounts
-for them:
+- **M1 (source-anchored core) — landed.** The editor was re-architected: the raw
+  markdown text is now the buffer (`ropey::Rope`), edits splice it, and `text()`
+  is **byte-lossless** (`cargo test -p sred-core --test fidelity` — round-trips a
+  corpus incl. CRLF, trailing whitespace, nested lists, HTML, tables, todo lines,
+  unicode). The rich view (`view.rs`) styles markers *in place* (visible-marker
+  "live-preview-lite"): `#`/`**`/`- ` stay in the source and are styled. Toolbar
+  actions now write real markers (`Bold` → `**…**`, `H2` → `## `).
+- Remaining 0.2 milestones (M2–M8): scrolling, host theming/scale, embeddable
+  binding + Slint 1.13 alignment, inline-token & block-widget extension APIs,
+  a11y/test parity, and Noet integration. See `docs/ROADMAP.md`.
 
-- **Editable buffer is line-granular.** Each block is one editable line
-  (`text: Vec<char>` + per-char `MarkSet` + per-block `BlockKind`); multi-line
-  constructs (fenced code, multi-paragraph quotes) are consecutive same-kind
-  blocks re-merged on save. Block structure now **does** survive edit→save. A
-  production buffer would swap the `Vec<char>` for a `ropey::Rope` for large-doc
-  performance — the `EditorCore` API (`apply` / `styled_runs` / `to_document`)
-  wouldn't change.
-- **Link/image/math are inserted as literal source snippets**, not yet edited as
-  rich objects (the flat mark map has no per-run href storage). Phase 5.
-- **Full re-raster per edit.** Dirty-region caching is Phase 6 — currently every
-  edit re-shapes and re-rasterizes the whole document.
+### Current simplifications
+- **Inline styling is pragmatic** (non-nested common cases) and **decoupled from
+  fidelity** — the buffer is the source of truth, so styling accuracy can be
+  refined without risking the saved bytes.
+- **Hidden-marker "true" Live Preview** (reveal `**`/`#` only at the caret) is
+  post-0.2; markers are currently always visible.
+- **Full re-raster per edit.** Viewport-bounded rendering is M2.
 
 ## Build & requirements
 

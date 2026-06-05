@@ -1,11 +1,14 @@
-//! `sred-core` — a format-agnostic rich-text editor core.
+//! `sred-core` — a UI-free, source-anchored rich-text editor core.
 //!
-//! Layers (all UI-free):
-//! - [`model`]    — the superset document AST (blocks + inline runs with marks).
-//! - [`format`]   — the `DocumentFormat` backend trait + capability masks.
-//! - [`markdown`] / [`typst_fmt`] — the two backends.
-//! - [`editor`]   — the editing engine (commands, cursor, selection, marks).
+//! Layers:
+//! - [`editor`]   — source-anchored editing engine: the raw markdown text is the
+//!                  buffer; edits splice it, so `text()` is byte-lossless.
+//! - [`view`]     — styles the raw markdown in place (runs, decorations, links).
 //! - [`layout`]   — cosmic-text shaping + rasterization to an RGBA frame.
+//! - [`model`]    — shared types (`Format`, `MarkSet`) + the document AST used by
+//!                  the standalone backends.
+//! - [`format`] / [`markdown`] / [`typst_fmt`] — document backends (used by the
+//!                  demo and tests; not on the source-anchored editing path).
 
 pub mod editor;
 pub mod format;
@@ -13,6 +16,7 @@ pub mod layout;
 pub mod markdown;
 pub mod model;
 pub mod typst_fmt;
+pub mod view;
 
 pub use editor::{BlockKind, Command, Decoration, EditorCore, Motion, Span};
 pub use format::{backend_for, Caps, DocumentFormat, FormatError};
@@ -60,87 +64,83 @@ mod tests {
         assert!(typ.contains("*b*"), "expected typst strong, got: {typ}");
     }
 
+    // ---- source-anchored editor (byte-lossless) --------------------------
+
     #[test]
-    fn block_structure_survives_edit_cycle() {
-        // Open a doc with a heading + two bullets, edit nothing structural, save:
-        // the structure must come back out.
-        let src = "# Title\n\n- one\n- two\n";
+    fn fidelity_roundtrip_verbatim() {
+        // Loading then reading back must be byte-for-byte identical.
+        let src = "# Title\n\n- one\n- two\n\n```rust\nfn main() {}\n```\n\n> quote with **bold**\n\nmixed _emph_ and `code` and a [link](https://x.io).\n";
+        let ed = EditorCore::from_source(src, Format::Markdown);
+        assert_eq!(ed.text(), src, "open→text must be verbatim");
+    }
+
+    #[test]
+    fn edit_is_diff_minimal() {
+        // Inserting in the middle changes only the touched bytes.
+        let src = "line one\nline two\nline three\n";
         let mut ed = EditorCore::from_source(src, Format::Markdown);
-        let out = ed.source();
-        let doc = markdown::Markdown.parse(&out).unwrap();
-        assert!(matches!(doc.blocks[0], Block::Heading { level: 1, .. }));
-        assert!(
-            matches!(&doc.blocks[1], Block::List(l) if !l.ordered && l.items.len() == 2),
-            "expected a 2-item bullet list, got: {:?}",
-            doc.blocks
-        );
-        // Now type at the end and make the current block a heading.
+        ed.set_cursor(0);
+        for _ in 0..("line one".len()) {
+            ed.apply(Command::Move(Motion::Right));
+        }
         ed.apply(Command::Insert("!".into()));
+        assert_eq!(ed.text(), "line one!\nline two\nline three\n");
+    }
+
+    #[test]
+    fn toggle_bold_writes_markers_in_source() {
+        let mut ed = EditorCore::from_source("hello world", Format::Markdown);
+        ed.apply(Command::SelectAll);
+        ed.apply(Command::ToggleMark(MarkSet::BOLD));
+        assert_eq!(ed.text(), "**hello world**");
+        // toggling again unwraps
+        ed.apply(Command::SelectAll);
+        ed.apply(Command::ToggleMark(MarkSet::BOLD));
+        assert_eq!(ed.text(), "hello world");
+    }
+
+    #[test]
+    fn set_block_writes_real_markers() {
+        let mut ed = EditorCore::from_source("Title", Format::Markdown);
         ed.apply(Command::ToggleBlock(BlockKind::Heading(2)));
-        let doc2 = markdown::Markdown.parse(&ed.source()).unwrap();
-        assert!(
-            doc2.blocks.iter().any(|b| matches!(b, Block::Heading { level: 2, .. })),
-            "expected an H2 after ToggleBlock, got: {:?}",
-            doc2.blocks
-        );
+        assert_eq!(ed.text(), "## Title");
+        // toggling H2 off returns to a plain paragraph
+        ed.apply(Command::ToggleBlock(BlockKind::Heading(2)));
+        assert_eq!(ed.text(), "Title");
+
+        let mut ed = EditorCore::from_source("item", Format::Markdown);
+        ed.apply(Command::ToggleBlock(BlockKind::Bullet));
+        assert_eq!(ed.text(), "- item");
     }
 
     #[test]
-    fn autoformat_promotes_markers() {
-        // "# " -> H1, "- " -> bullet, "= " -> H1 (typst style)
-        for (marker, want_h) in [("# ", 1u8), ("## ", 2), ("=== ", 3)] {
-            let mut ed = EditorCore::new(Format::Markdown);
-            for ch in marker.chars() {
-                ed.apply(Command::Insert(ch.to_string()));
-            }
-            ed.apply(Command::Insert("Title".into()));
-            let doc = ed.to_document();
-            assert!(
-                matches!(doc.blocks[0], Block::Heading { level, .. } if level == want_h),
-                "marker {marker:?} should give H{want_h}, got {:?}",
-                doc.blocks
-            );
-        }
-        let mut ed = EditorCore::new(Format::Markdown);
-        for ch in "- item".chars() {
-            ed.apply(Command::Insert(ch.to_string()));
-        }
-        assert!(matches!(&ed.to_document().blocks[0], Block::List(l) if !l.ordered));
+    fn enter_continues_then_exits_list() {
+        let mut ed = EditorCore::from_source("- a", Format::Markdown);
+        ed.set_cursor(ed.len()); // caret at end of "- a"
+        ed.apply(Command::Insert("\n".into())); // continue → "- a\n- "
+        assert_eq!(ed.text(), "- a\n- ");
+        ed.apply(Command::Insert("\n".into())); // empty item → exit (drop marker)
+        assert_eq!(ed.text(), "- a\n");
     }
 
     #[test]
-    fn enter_and_backspace_exit_list() {
-        // Build "- a" then Enter (new empty bullet) then Enter again → exits list.
-        let mut ed = EditorCore::new(Format::Markdown);
-        for ch in "- a".chars() {
-            ed.apply(Command::Insert(ch.to_string()));
-        }
-        ed.apply(Command::Insert("\n".into())); // new empty bullet
-        ed.apply(Command::Insert("\n".into())); // empty → exit to paragraph
-        let doc = ed.to_document();
-        assert!(
-            matches!(&doc.blocks[0], Block::List(l) if l.items.len() == 1),
-            "first block should remain a 1-item list, got {:?}",
-            doc.blocks
-        );
-        assert!(
-            doc.blocks.iter().any(|b| matches!(b, Block::Paragraph(_))),
-            "exiting the list should leave a paragraph, got {:?}",
-            doc.blocks
-        );
+    fn make_link_wraps_selection() {
+        let mut ed = EditorCore::from_source("click", Format::Markdown);
+        ed.apply(Command::SelectAll);
+        ed.apply(Command::Link("https://x.io".into()));
+        assert_eq!(ed.text(), "[click](https://x.io)");
+        ed.set_cursor(2); // inside the link text
+        assert_eq!(ed.link_at_cursor().as_deref(), Some("https://x.io"));
+        assert!(ed.update_link_at_cursor("https://y.io"));
+        assert_eq!(ed.text(), "[click](https://y.io)");
+    }
 
-        // Backspace at the start of a bullet un-bullets it.
-        let mut ed = EditorCore::new(Format::Markdown);
-        for ch in "- hi".chars() {
-            ed.apply(Command::Insert(ch.to_string()));
-        }
-        ed.apply(Command::Move(Motion::LineStart));
-        ed.apply(Command::DeleteBackward);
-        assert!(
-            matches!(&ed.to_document().blocks[0], Block::Paragraph(_)),
-            "backspace at bullet start should produce a paragraph, got {:?}",
-            ed.to_document().blocks
-        );
+    #[test]
+    fn color_command_is_noop_on_source() {
+        let mut ed = EditorCore::from_source("hi", Format::Markdown);
+        ed.apply(Command::SelectAll);
+        ed.apply(Command::SetColor(Some(0xCC2222FF)));
+        assert_eq!(ed.text(), "hi", "color must not touch the source");
     }
 
     #[test]
