@@ -1,0 +1,10 @@
+[package]
+name = "sred-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Demo app embedding the sred RichTextEditor Slint component"
+
+[dependencies]
+sred-slint = { path = "../sred-slint" }
+slint.workspace = true

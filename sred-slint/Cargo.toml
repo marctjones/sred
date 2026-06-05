@@ -1,0 +1,19 @@
+[package]
+name = "sred-slint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reusable Slint RichTextEditor component backed by sred-core"
+build = "build.rs"
+
+[dependencies]
+sred-core = { path = "../sred-core" }
+slint.workspace = true
+arboard = "3"
+open = "5"
+
+[build-dependencies]
+slint-build.workspace = true
+
+[dev-dependencies]
+i-slint-backend-testing = "1.16"

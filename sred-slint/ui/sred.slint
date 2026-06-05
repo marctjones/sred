@@ -1,0 +1,358 @@
+import { ComboBox, ScrollView } from "std-widgets.slint";
+
+// ---------------------------------------------------------------------------
+// The reusable editor component. All heavy lifting (shaping, cursor, backends)
+// lives in Rust (sred-core); this is a thin render + input surface.
+// ---------------------------------------------------------------------------
+export component RichTextEditor inherits Rectangle {
+    in property <image> frame;
+    in property <length> doc-height: 400px;
+    in property <length> caret-x;
+    in property <length> caret-y;
+    in property <length> caret-h: 22px;
+    in property <bool> caret-on: true;
+
+    callback insert-text(string);
+    callback chord(string) -> bool;
+    callback special(string);
+    callback pointer-down(length, length);
+    callback pointer-drag(length, length);
+    callback pointer-double(length, length);
+    callback resized(length);
+
+    // Pointer-press origin + a small drag threshold so a plain click never
+    // creates a stray 1-character selection.
+    property <length> down-x;
+    property <length> down-y;
+    property <bool> dragging;
+
+    background: #fdfdfa;
+    border-color: scope.has-focus ? #4080ff : #d8d8d2;
+    border-width: 1px;
+    clip: true;
+    forward-focus: scope;
+
+    scope := FocusScope {
+        key-pressed(event) => {
+            // Swallow every Ctrl-combo (handled as a shortcut) so control
+            // characters are never inserted as text.
+            if (event.modifiers.control) {
+                root.chord(event.text);
+                return EventResult.accept;
+            }
+            if (event.text == Key.Backspace)   { root.special("backspace"); return EventResult.accept; }
+            if (event.text == Key.Delete)      { root.special("delete");    return EventResult.accept; }
+            if (event.text == Key.LeftArrow)   { root.special(event.modifiers.shift ? "select-left" : "left");   return EventResult.accept; }
+            if (event.text == Key.RightArrow)  { root.special(event.modifiers.shift ? "select-right" : "right"); return EventResult.accept; }
+            if (event.text == Key.UpArrow)     { root.special("up");   return EventResult.accept; }
+            if (event.text == Key.DownArrow)   { root.special("down"); return EventResult.accept; }
+            if (event.text == Key.Home)        { root.special("home"); return EventResult.accept; }
+            if (event.text == Key.End)         { root.special("end");  return EventResult.accept; }
+            if (event.text == Key.Return)      { root.insert-text("\n"); return EventResult.accept; }
+            if (event.text != "") {
+                root.insert-text(event.text);
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+
+        flick := Flickable {
+            // Non-interactive so drags go to text selection, not scrolling.
+            interactive: false;
+            viewport-height: root.doc-height;
+            viewport-width: self.width;
+
+            img := Image {
+                x: 0;
+                y: 0;
+                width: flick.width;
+                height: root.doc-height;
+                source: root.frame;
+                image-fit: ImageFit.fill;
+                changed width => { root.resized(self.width); }
+                init => { root.resized(self.width); }
+            }
+
+            TouchArea {
+                width: flick.width;
+                height: root.doc-height;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                        scope.focus();
+                        root.down-x = self.mouse-x;
+                        root.down-y = self.mouse-y;
+                        root.dragging = false;
+                        root.pointer-down(self.mouse-x, self.mouse-y);
+                    }
+                }
+                moved => {
+                    if (self.pressed) {
+                        if (!root.dragging
+                            && (self.mouse-x - root.down-x > 4px || root.down-x - self.mouse-x > 4px
+                                || self.mouse-y - root.down-y > 4px || root.down-y - self.mouse-y > 4px)) {
+                            root.dragging = true;
+                        }
+                        if (root.dragging) {
+                            root.pointer-drag(self.mouse-x, self.mouse-y);
+                        }
+                    }
+                }
+                double-clicked => { root.pointer-double(self.mouse-x, self.mouse-y); }
+            }
+
+            Rectangle {
+                x: root.caret-x;
+                y: root.caret-y;
+                width: 2px;
+                height: root.caret-h;
+                background: #1166dd;
+                visible: root.caret-on && scope.has-focus;
+            }
+        }
+    }
+}
+
+// A readable toolbar button: dark (or tinted) label on a light background.
+component ToolBtn inherits Rectangle {
+    in property <string> label;
+    in property <string> cmd;
+    in property <color> text-color: #303030;
+    callback command(string);
+    height: 26px;
+    min-width: t.preferred-width + 16px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: #c6c6c0;
+    background: ta.pressed ? #d4d4ce : (ta.has-hover ? #e8e8e2 : #f7f7f3);
+    t := Text {
+        text: root.label;
+        color: root.text-color;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        clicked => { root.command(root.cmd); }
+    }
+}
+
+component Sep inherits Rectangle {
+    width: 1px;
+    background: #cfcfc9;
+}
+
+// ---------------------------------------------------------------------------
+// Demo host window: menu bar + classic toolbar + editor + live source view.
+// ---------------------------------------------------------------------------
+export component MainWindow inherits Window {
+    title: "sred — rich text editor";
+    preferred-width: 980px;
+    preferred-height: 760px;
+
+    in property <image> frame <=> editor.frame;
+    in property <length> doc-height <=> editor.doc-height;
+    in property <length> caret-x <=> editor.caret-x;
+    in property <length> caret-y <=> editor.caret-y;
+    in property <length> caret-h <=> editor.caret-h;
+    in property <bool> caret-on <=> editor.caret-on;
+    in property <string> source-text;
+    in property <[string]> formats: ["markdown", "typst"];
+
+    callback insert-text <=> editor.insert-text;
+    callback chord <=> editor.chord;
+    callback special <=> editor.special;
+    callback pointer-down <=> editor.pointer-down;
+    callback pointer-drag <=> editor.pointer-drag;
+    callback pointer-double <=> editor.pointer-double;
+    callback resized <=> editor.resized;
+    callback command(string);
+    callback format-changed(string);
+    callback apply-link-url(string);
+    in-out property <string> link-url;
+
+    forward-focus: editor;
+
+    MenuBar {
+        Menu {
+            title: "Edit";
+            MenuItem { title: "Undo  (Ctrl+Z)"; activated => { root.command("undo"); } }
+            MenuItem { title: "Redo  (Ctrl+Y)"; activated => { root.command("redo"); } }
+            MenuSeparator {}
+            MenuItem { title: "Cut  (Ctrl+X)"; activated => { root.command("cut"); } }
+            MenuItem { title: "Copy  (Ctrl+C)"; activated => { root.command("copy"); } }
+            MenuItem { title: "Paste  (Ctrl+V)"; activated => { root.command("paste"); } }
+            MenuItem { title: "Select All  (Ctrl+A)"; activated => { root.command("selectall"); } }
+        }
+        Menu {
+            title: "Format";
+            MenuItem { title: "Bold  (Ctrl+B)"; activated => { root.command("bold"); } }
+            MenuItem { title: "Italic  (Ctrl+I)"; activated => { root.command("italic"); } }
+            MenuItem { title: "Inline Code  (Ctrl+E)"; activated => { root.command("code"); } }
+            MenuItem { title: "Strikethrough"; activated => { root.command("strike"); } }
+            MenuSeparator {}
+            MenuItem { title: "Text Color: Red"; activated => { root.command("color-red"); } }
+            MenuItem { title: "Text Color: Green"; activated => { root.command("color-green"); } }
+            MenuItem { title: "Text Color: Blue"; activated => { root.command("color-blue"); } }
+            MenuItem { title: "Text Color: Clear"; activated => { root.command("color-clear"); } }
+        }
+        Menu {
+            title: "Paragraph";
+            MenuItem { title: "Body Text"; activated => { root.command("paragraph"); } }
+            MenuItem { title: "Heading 1"; activated => { root.command("h1"); } }
+            MenuItem { title: "Heading 2"; activated => { root.command("h2"); } }
+            MenuItem { title: "Heading 3"; activated => { root.command("h3"); } }
+            MenuSeparator {}
+            MenuItem { title: "Bulleted List"; activated => { root.command("bullet"); } }
+            MenuItem { title: "Numbered List"; activated => { root.command("ordered"); } }
+            MenuItem { title: "Block Quote"; activated => { root.command("quote"); } }
+            MenuItem { title: "Code Block"; activated => { root.command("codeblock"); } }
+            MenuItem { title: "Divider"; activated => { root.command("divider"); } }
+        }
+        Menu {
+            title: "Insert";
+            MenuItem { title: "Link from selection  (Ctrl+K)"; activated => { root.command("link"); } }
+            MenuItem { title: "Open Link at cursor"; activated => { root.command("openlink"); } }
+            MenuSeparator {}
+            MenuItem { title: "Image"; activated => { root.command("image"); } }
+            MenuItem { title: "Math"; activated => { root.command("math"); } }
+            MenuItem { title: "Table"; activated => { root.command("table"); } }
+        }
+    }
+
+    VerticalLayout {
+        // ---- toolbar ---------------------------------------------------------
+        Rectangle {
+            background: #ececea;
+            VerticalLayout {
+                padding: 5px;
+                spacing: 5px;
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    ToolBtn { label: "Undo"; cmd: "undo"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Redo"; cmd: "redo"; command(c) => { root.command(c); } }
+                    Sep {}
+                    ToolBtn { label: "Cut"; cmd: "cut"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Copy"; cmd: "copy"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Paste"; cmd: "paste"; command(c) => { root.command(c); } }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text { text: "format:"; color: #333; vertical-alignment: center; }
+                    ComboBox {
+                        model: root.formats;
+                        current-value: "markdown";
+                        selected(v) => { root.format-changed(v); }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    ToolBtn { label: "Bold"; cmd: "bold"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Italic"; cmd: "italic"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Code"; cmd: "code"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Strike"; cmd: "strike"; command(c) => { root.command(c); } }
+                    Sep {}
+                    ToolBtn { label: "Red"; cmd: "color-red"; text-color: #cc2222; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Green"; cmd: "color-green"; text-color: #1e8e3e; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Blue"; cmd: "color-blue"; text-color: #1a56d6; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Orange"; cmd: "color-orange"; text-color: #c8650a; command(c) => { root.command(c); } }
+                    ToolBtn { label: "No Color"; cmd: "color-clear"; command(c) => { root.command(c); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    ToolBtn { label: "Body"; cmd: "paragraph"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "H1"; cmd: "h1"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "H2"; cmd: "h2"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "H3"; cmd: "h3"; command(c) => { root.command(c); } }
+                    Sep {}
+                    ToolBtn { label: "Bullets"; cmd: "bullet"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Numbered"; cmd: "ordered"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Quote"; cmd: "quote"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Code Block"; cmd: "codeblock"; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Divider"; cmd: "divider"; command(c) => { root.command(c); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                // Link row: create / open, and an editable URL field.
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    ToolBtn { label: "Make Link"; cmd: "link"; text-color: #1a56d6; command(c) => { root.command(c); } }
+                    ToolBtn { label: "Open Link"; cmd: "openlink"; command(c) => { root.command(c); } }
+                    Sep {}
+                    Text { text: "URL:"; color: #333; vertical-alignment: center; }
+                    Rectangle {
+                        min-width: 300px;
+                        height: 26px;
+                        background: white;
+                        border-width: 1px;
+                        border-color: #c6c6c0;
+                        border-radius: 5px;
+                        clip: true;
+                        urlfield := TextInput {
+                            x: 7px;
+                            width: parent.width - 14px;
+                            height: 100%;
+                            text <=> root.link-url;
+                            vertical-alignment: center;
+                            font-size: 13px;
+                            single-line: true;
+                            accepted => { root.apply-link-url(self.text); }
+                        }
+                    }
+                    Rectangle {
+                        min-width: ab.preferred-width + 18px;
+                        height: 26px;
+                        border-radius: 5px;
+                        border-width: 1px;
+                        border-color: #c6c6c0;
+                        background: abta.pressed ? #d4d4ce : (abta.has-hover ? #e8e8e2 : #f7f7f3);
+                        ab := Text {
+                            text: "Apply URL";
+                            color: #303030;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        abta := TouchArea {
+                            clicked => { root.apply-link-url(urlfield.text); }
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            }
+        }
+
+        // ---- editor ----------------------------------------------------------
+        editor := RichTextEditor {
+            vertical-stretch: 3;
+        }
+
+        // ---- live source preview --------------------------------------------
+        Rectangle {
+            vertical-stretch: 1;
+            background: #f3f3ee;
+            border-width: 1px;
+            border-color: #ddddda;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 4px;
+                Text { text: "SOURCE"; font-size: 11px; color: #888; }
+                ScrollView {
+                    Text {
+                        text: root.source-text;
+                        font-family: "monospace";
+                        font-size: 13px;
+                        color: #333;
+                        wrap: word-wrap;
+                        width: parent.visible-width;
+                    }
+                }
+            }
+        }
+    }
+}

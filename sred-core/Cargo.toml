@@ -1,0 +1,14 @@
+[package]
+name = "sred-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Format-agnostic rich-text editor core (Markdown + Typst) — no UI dependency"
+
+[dependencies]
+cosmic-text.workspace = true
+pulldown-cmark.workspace = true
+typst-syntax.workspace = true
+ropey.workspace = true
+bitflags.workspace = true
+unicode-segmentation.workspace = true

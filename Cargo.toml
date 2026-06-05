@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["sred-core", "sred-slint", "sred-demo"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+slint = "1.16"
+slint-build = "1.16"
+cosmic-text = "0.14"
+pulldown-cmark = { version = "0.13", default-features = false }
+pulldown-cmark-to-cmark = "22"
+typst-syntax = "0.14"
+ropey = "1.6"
+bitflags = "2"
+unicode-segmentation = "1"
