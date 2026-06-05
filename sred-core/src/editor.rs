@@ -180,8 +180,9 @@ impl EditorCore {
 
     // ---- styling/decoration views (delegated to the view builder) ----------
 
-    pub fn styled_runs(&self, base: f32) -> (Vec<Span>, Vec<usize>) {
-        crate::view::styled_runs(&self.text(), self.format, base)
+    pub fn styled_runs(&self, base: f32) -> (Vec<Span>, Vec<i32>) {
+        let caret_line = self.rope.char_to_line(self.cursor);
+        crate::view::styled_runs(&self.text(), self.format, base, caret_line)
     }
 
     pub fn decorations(&self) -> Vec<(usize, usize, Decoration)> {

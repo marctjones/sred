@@ -159,6 +159,30 @@ mod tests {
     }
 
     #[test]
+    fn live_preview_hides_markers_off_caret_line() {
+        let src = "para\n## Heading\n- item";
+        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0); // caret line 0
+        let display: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert!(display.contains("Heading"));
+        assert!(
+            !display.contains("## Heading"),
+            "heading marker should be hidden off the caret line: {display:?}"
+        );
+        assert!(display.contains("• item"), "bullet should be substituted: {display:?}");
+        assert_eq!(deltas[1], -3, "hidden '## ' → delta -3");
+        assert_eq!(deltas[2], 2, "'- ' → '• ' → delta +2");
+    }
+
+    #[test]
+    fn live_preview_reveals_markers_on_caret_line() {
+        let src = "## Heading";
+        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0); // caret on line 0
+        let display: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert!(display.contains("## Heading"), "caret line shows the raw marker: {display:?}");
+        assert_eq!(deltas[0], 0);
+    }
+
+    #[test]
     fn insert_drops_control_and_pua() {
         let mut ed = EditorCore::new(Format::Markdown);
         ed.apply(Command::Insert("a\u{1b}b\u{f700}c\u{7}".into())); // esc, PUA arrow, bell
