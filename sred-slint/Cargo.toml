@@ -6,6 +6,10 @@ license.workspace = true
 description = "Reusable Slint RichTextEditor component backed by sred-core"
 build = "build.rs"
 
+[features]
+# Forward syntect code highlighting to sred-core.
+syntax-highlight = ["sred-core/syntax-highlight"]
+
 [dependencies]
 sred-core = { path = "../sred-core" }
 slint.workspace = true

@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Demo app embedding the sred RichTextEditor Slint component"
 
+[features]
+# The demo enables code highlighting so it's visible out of the box.
+default = ["sred-slint/syntax-highlight"]
+
 [dependencies]
 sred-slint = { path = "../sred-slint" }
 slint.workspace = true

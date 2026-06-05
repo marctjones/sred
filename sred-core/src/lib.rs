@@ -144,6 +144,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "syntax-highlight")]
+    fn fenced_code_block_gets_syntect_colors() {
+        // A highlighted code block should produce more than one foreground color.
+        let src = "```rust\nfn main() { let x = 1; }\n```\n";
+        let (spans, _) = view::styled_runs(src, Format::Markdown, 16.0);
+        let colors: std::collections::HashSet<[u8; 4]> =
+            spans.iter().filter_map(|s| s.color).collect();
+        assert!(
+            colors.len() >= 2,
+            "expected multiple syntect colors in a code block, got {}",
+            colors.len()
+        );
+    }
+
+    #[test]
     fn insert_drops_control_and_pua() {
         let mut ed = EditorCore::new(Format::Markdown);
         ed.apply(Command::Insert("a\u{1b}b\u{f700}c\u{7}".into())); // esc, PUA arrow, bell

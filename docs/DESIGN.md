@@ -195,6 +195,26 @@ BlockWidgetSpec { id, line_matcher: fn(&str)->Option<State>, draw, on_action }
   code, link` colors + a `scale: float` (Noet's `Z.f`) + `dark: bool`.
 - The Rust renderer reads these instead of the hardcoded `layout::Theme`.
 
+## 4a. Where markdown / typst / code support lives
+
+cosmic-text is **format-agnostic** — it edits/renders plain text + `Attrs` and
+has *no* document-format support (no markdown/typst/html parser; the optional
+`vi` feature only adds syntect source highlighting). So format understanding is
+necessarily app/library level, and we split it deliberately:
+
+| Concern | Owner | How |
+|---|---|---|
+| Markdown **live-preview styling** (headings/bold/lists/links) | **sred** | `view.rs` derives per-line attrs from the source |
+| **Code syntax highlighting** in fenced blocks (and code/typst notes) | **sred** | `syntect` behind the `syntax-highlight` feature (pure-Rust `default-fancy`, default off; demo/Noet opt in) — `view.rs::code_highlights` colors ```lang blocks |
+| Typst **typesetting** (compile → image/PDF) | **Noet** | already shells to the `typst` CLI; sred can't and won't |
+| Typst note *editing* | **sred** | edited as highlighted source (typst grammar if present, else plain); the typeset preview stays Noet's image |
+| Domain tokens (`[[ ]]` `+[[ ]]` `@` `#` url), todos | **Noet** | via the §4.2/§4.3 extension APIs |
+
+Rationale: markdown styling and code highlighting are *generic editor*
+capabilities any consumer benefits from, so they belong in sred. Typst
+*typesetting* is a heavy, app-specific pipeline (Noet's image preview), so it
+stays in Noet — sred only edits the typst source text.
+
 ### 4.5 Accessibility / testing
 - The editor surface exposes `accessible-role`/`accessible-label` so Noet's
   headless `i-slint-backend-testing` `ElementHandle` tests can find and drive it.

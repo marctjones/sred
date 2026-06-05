@@ -11,9 +11,14 @@
 //! fidelity does not depend on it — the buffer is the source of truth — so the
 //! scanner can be refined without risk.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::model::{Format, MarkSet};
+
+/// Per-line syntax-highlight colors for fenced code blocks, keyed by line index
+/// (char-column ranges → RGBA). Empty unless the `syntax-highlight` feature is on.
+type CodeHighlights = HashMap<usize, Vec<(usize, usize, [u8; 4])>>;
 
 /// A contiguous run of identically-styled text for layout.
 pub struct Span {
@@ -34,6 +39,7 @@ pub enum Decoration {
 /// real text, nothing is injected).
 pub fn styled_runs(text: &str, _format: Format, base: f32) -> (Vec<Span>, Vec<usize>) {
     let lines: Vec<&str> = text.split('\n').collect();
+    let highlights = code_highlights(text);
     let mut spans = Vec::new();
     let mut prefix_bytes = Vec::with_capacity(lines.len());
     let mut in_fence = false;
@@ -70,24 +76,47 @@ pub fn styled_runs(text: &str, _format: Format, base: f32) -> (Vec<Span>, Vec<us
             }
             m
         };
+        // Per-char syntax-highlight colors for code lines (empty when the
+        // feature is off, so code falls back to the uniform CODE color).
+        let charcolors: Vec<Option<[u8; 4]>> = if line_is_code {
+            line_code_colors(highlights.get(&li), chars.len())
+        } else {
+            vec![None; chars.len()]
+        };
 
         let mut j = 0;
         while j < chars.len() {
             let mk = charmarks[j];
+            let col = charcolors[j];
             let start = j;
-            while j < chars.len() && charmarks[j] == mk {
+            while j < chars.len() && charmarks[j] == mk && charcolors[j] == col {
                 j += 1;
             }
             spans.push(Span {
                 text: chars[start..j].iter().collect(),
                 marks: mk,
-                color: None,
+                color: col,
                 size,
             });
         }
     }
 
     (spans, prefix_bytes)
+}
+
+fn line_code_colors(
+    ranges: Option<&Vec<(usize, usize, [u8; 4])>>,
+    len: usize,
+) -> Vec<Option<[u8; 4]>> {
+    let mut out = vec![None; len];
+    if let Some(ranges) = ranges {
+        for &(s, e, c) in ranges {
+            for slot in out.iter_mut().take(e.min(len)).skip(s.min(len)) {
+                *slot = Some(c);
+            }
+        }
+    }
+    out
 }
 
 /// Strike (`~~…~~`) and underline (links) ranges in global char offsets.
@@ -288,6 +317,80 @@ fn apply_links_marks(chars: &[char], _code: &[bool], marks: &mut [MarkSet]) {
             marks[k].insert(MarkSet::LINK);
         }
     }
+}
+
+// ---- syntax highlighting (syntect, feature-gated) -------------------------
+
+/// Scan fenced code blocks (```lang … ```) and return per-line highlight colors.
+/// No-op (empty) unless the `syntax-highlight` feature is enabled.
+#[cfg(not(feature = "syntax-highlight"))]
+fn code_highlights(_text: &str) -> CodeHighlights {
+    CodeHighlights::new()
+}
+
+#[cfg(feature = "syntax-highlight")]
+fn code_highlights(text: &str) -> CodeHighlights {
+    use std::sync::OnceLock;
+    use syntect::easy::HighlightLines;
+    use syntect::highlighting::{Theme, ThemeSet};
+    use syntect::parsing::SyntaxSet;
+    use syntect::util::LinesWithEndings;
+
+    static RES: OnceLock<(SyntaxSet, Theme)> = OnceLock::new();
+    let (ps, theme) = RES.get_or_init(|| {
+        let ps = SyntaxSet::load_defaults_newlines();
+        let mut ts = ThemeSet::load_defaults();
+        // A light theme to match the default light background.
+        let theme = ts
+            .themes
+            .remove("InspiredGitHub")
+            .unwrap_or_else(|| ts.themes.values().next().cloned().unwrap());
+        (ps, theme)
+    });
+
+    let mut out = CodeHighlights::new();
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
+        let lang = trimmed.strip_prefix("```").map(str::trim);
+        let Some(lang) = lang.filter(|l| !l.is_empty()) else {
+            i += 1;
+            continue;
+        };
+        // Collect the block body until the closing fence.
+        let body_start = i + 1;
+        let mut j = body_start;
+        while j < lines.len() && !lines[j].trim_start().starts_with("```") {
+            j += 1;
+        }
+        let body = lines[body_start..j].join("\n");
+        let syntax = ps
+            .find_syntax_by_token(lang)
+            .unwrap_or_else(|| ps.find_syntax_plain_text());
+        let mut hl = HighlightLines::new(syntax, theme);
+        for (k, line) in LinesWithEndings::from(&body).enumerate() {
+            let line_idx = body_start + k;
+            let Ok(ranges) = hl.highlight_line(line, ps) else {
+                continue;
+            };
+            let mut col = 0usize;
+            let mut spans = Vec::new();
+            for (style, piece) in ranges {
+                let n = piece.trim_end_matches(['\n', '\r']).chars().count();
+                if n > 0 {
+                    let c = style.foreground;
+                    spans.push((col, col + n, [c.r, c.g, c.b, 255]));
+                }
+                col += piece.chars().count();
+            }
+            if !spans.is_empty() {
+                out.insert(line_idx, spans);
+            }
+        }
+        i = j; // resume at the closing fence (or end)
+    }
+    out
 }
 
 fn push_runs(

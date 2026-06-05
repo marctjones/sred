@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 description = "Format-agnostic rich-text editor core (Markdown + Typst) — no UI dependency"
 
+[features]
+# Syntect-based syntax highlighting for fenced code blocks (and code/typst
+# notes). Off by default — syntect is a heavy dep; consumers (e.g. the demo,
+# noet) opt in. Uses fancy-regex (pure Rust, no C oniguruma).
+syntax-highlight = ["dep:syntect"]
+
 [dependencies]
 cosmic-text.workspace = true
 pulldown-cmark.workspace = true
@@ -12,3 +18,4 @@ typst-syntax.workspace = true
 ropey.workspace = true
 bitflags.workspace = true
 unicode-segmentation.workspace = true
+syntect = { version = "5", default-features = false, features = ["default-fancy"], optional = true }
