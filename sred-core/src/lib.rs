@@ -237,6 +237,25 @@ mod tests {
     }
 
     #[test]
+    fn typst_full_via_typst_syntax() {
+        fn marks_of(line: &str) -> Vec<MarkSet> {
+            let (spans, _) = view::styled_runs(line, Format::Typst, 16.0, 0, &[], 0);
+            spans.iter().flat_map(|s| s.text.chars().map(move |_| s.marks)).collect()
+        }
+        // Nested strong+emph: *b _i_*  → chars: * b ␠ _ i _ *
+        let m = marks_of("*b _i_*");
+        assert!(m[1].contains(MarkSet::BOLD), "b should be bold");
+        assert!(
+            m[4].contains(MarkSet::BOLD) && m[4].contains(MarkSet::ITALIC),
+            "i should be bold+italic"
+        );
+        // Code mode (#let …) is recognized and styled like code.
+        assert!(marks_of("#let x = 1").iter().any(|x| x.contains(MarkSet::CODE)));
+        // A reference @target is link-styled.
+        assert!(marks_of("see @intro here").iter().any(|x| x.contains(MarkSet::LINK)));
+    }
+
+    #[test]
     fn typst_and_markdown_differ_on_single_asterisk() {
         // Same source, format-dependent: '*x*' is STRONG in Typst, EMPHASIS in
         // Markdown. This is why the styling cache key must include the format.

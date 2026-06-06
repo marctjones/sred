@@ -476,69 +476,65 @@ fn line_marks_md(line: &str) -> Vec<MarkSet> {
     marks
 }
 
-/// Typst inline marks (Level 1): raw `` `…` ``, math `$…$` (styled like code),
-/// strong `*…*` (single asterisk, unlike Markdown's `**`), emphasis `_…_`.
+/// Typst inline marks (MF2), driven by `typst-syntax`'s own highlighter — the
+/// official Typst parser + `highlight()` categorizer — so strong/emph/raw/math,
+/// references/labels, and code-mode constructs (`#let`, function calls, numbers,
+/// strings, keywords) all follow the real grammar.
+///
+/// Operates on the line's *display* text. Block-level marker hiding + deltas stay
+/// in `project_line_typst`; this only assigns inline styling, so it can't affect
+/// the byte-delta/cursor mapping.
 fn line_marks_typst(line: &str) -> Vec<MarkSet> {
-    let chars: Vec<char> = line.chars().collect();
-    let n = chars.len();
+    use typst_syntax::{parse, LinkedNode};
+    let n = line.chars().count();
     let mut marks = vec![MarkSet::empty(); n];
-    let mut code = vec![false; n];
-
-    // Raw and math are "code-protected" so emphasis scanning ignores their guts.
-    scan_pairs_single(&chars, '`', &mut marks, &mut code, MarkSet::CODE);
-    scan_pairs_single(&chars, '$', &mut marks, &mut code, MarkSet::CODE);
-
-    apply_single(&chars, &code, &mut marks, '*', MarkSet::BOLD);
-    apply_single(&chars, &code, &mut marks, '_', MarkSet::ITALIC);
+    if line.is_empty() {
+        return marks;
+    }
+    let mut b2c = vec![n; line.len() + 1];
+    for (ci, (bi, _)) in line.char_indices().enumerate() {
+        b2c[bi] = ci;
+    }
+    b2c[line.len()] = n;
+    let root = parse(line);
+    typst_marks_walk(&LinkedNode::new(&root), &b2c, n, &mut marks);
     marks
 }
 
-/// Mark `delim … delim` pairs on one line with `bit`, protecting their contents
-/// from later emphasis scanning (`code[k] = true`). Used for `` ` `` and `$`.
-fn scan_pairs_single(chars: &[char], delim: char, marks: &mut [MarkSet], code: &mut [bool], bit: MarkSet) {
-    let n = chars.len();
-    let mut i = 0;
-    while i < n {
-        if chars[i] == delim {
-            if let Some(j) = (i + 1..n).find(|&k| chars[k] == delim) {
-                for k in i..=j {
-                    marks[k].insert(bit);
-                    code[k] = true;
-                }
-                i = j + 1;
-                continue;
-            }
+fn typst_marks_walk(node: &typst_syntax::LinkedNode, b2c: &[usize], n: usize, marks: &mut [MarkSet]) {
+    use typst_syntax::{highlight, SyntaxKind, Tag};
+    // `highlight()` returns None for the `Equation` node (its `$` + inner tokens
+    // are tagged separately); style the whole math span like code instead.
+    let bit = if node.kind() == SyntaxKind::Equation {
+        Some(MarkSet::CODE)
+    } else {
+        match highlight(node) {
+            Some(Tag::Strong) => Some(MarkSet::BOLD),
+            Some(Tag::Emph) => Some(MarkSet::ITALIC),
+            Some(Tag::Raw) | Some(Tag::MathDelimiter) | Some(Tag::MathOperator) => Some(MarkSet::CODE),
+            Some(Tag::Link) | Some(Tag::Ref) | Some(Tag::Label) => Some(MarkSet::LINK),
+            Some(Tag::Keyword)
+            | Some(Tag::Function)
+            | Some(Tag::Number)
+            | Some(Tag::String)
+            | Some(Tag::Interpolated)
+            | Some(Tag::Operator)
+            | Some(Tag::Punctuation) => Some(MarkSet::CODE),
+            // Heading / ListMarker / Comment / Escape / Error: block-level or not
+            // styled inline.
+            _ => None,
         }
-        i += 1;
-    }
-}
-
-fn apply_single(chars: &[char], code: &[bool], marks: &mut [MarkSet], delim: char, bit: MarkSet) {
-    let n = chars.len();
-    let is_part_of_double = |k: usize| {
-        (k + 1 < n && chars[k + 1] == delim) || (k > 0 && chars[k - 1] == delim)
     };
-    let mut i = 0;
-    while i < n {
-        if !code[i] && chars[i] == delim && !is_part_of_double(i) && !marks[i].contains(bit) {
-            let mut j = i + 1;
-            let mut close = None;
-            while j < n {
-                if !code[j] && chars[j] == delim && !is_part_of_double(j) {
-                    close = Some(j);
-                    break;
-                }
-                j += 1;
-            }
-            if let Some(c) = close {
-                for k in i..=c {
-                    marks[k].insert(bit);
-                }
-                i = c + 1;
-                continue;
-            }
+    if let Some(bit) = bit {
+        let r = node.range();
+        let cs = *b2c.get(r.start).unwrap_or(&n);
+        let ce = *b2c.get(r.end).unwrap_or(&n);
+        for slot in marks.iter_mut().take(ce.min(n)).skip(cs.min(n)) {
+            slot.insert(bit);
         }
-        i += 1;
+    }
+    for child in node.children() {
+        typst_marks_walk(&child, b2c, n, marks);
     }
 }
 
