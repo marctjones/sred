@@ -1,5 +1,11 @@
 # MF1 / MF2 — Phase 2: block-level CommonMark & Typst (design + implementation)
 
+> **STATUS: DONE — shipped in 0.3.0-alpha.2.** All four steps (A analysis/projection
+> seam, B CommonMark block constructs, C Typst blocks via the syntax tree, D
+> per-token color channel) are implemented in `sred-core/src/view.rs`, gated by
+> `tests/commonmark.rs` + `tests/typst_blocks.rs`, perf-checked at ≈17 ms/4000
+> lines. The sections below are the original plan, kept as design rationale.
+
 **Cold-start brief.** Phase 1 (inline styling via real parsers) shipped in
 `v0.3.0-alpha.1`. This document is the executable plan for **Phase 2**: the
 *block-level* and cross-line constructs that the current per-line projection

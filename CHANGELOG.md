@@ -3,6 +3,41 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.3.0-alpha.2] — 2026-06-06
+
+### Added — Phase 2: block-level CommonMark & Typst + per-token colors
+
+Styling is now split into a caret-**independent** whole-document `analyze()`
+(one parse, cached by text) and a cheap caret-**dependent** `project()` per line.
+A caret move no longer reparses — only the two lines whose caret-state flipped
+re-project. The byte delta (the fidelity/cursor invariant) is produced entirely
+in `project()` from the marker byte range `analyze()` records.
+
+- **Step A — analysis/projection seam.** `LineInfo`/`DocAnalysis`; per-line
+  `STYLE_CACHE` replaced by `ANALYSIS_CACHE` (by text) + `PROJECT_CACHE` (by a
+  per-line digest that folds in every cross-line dependency). Pure refactor.
+- **Step B — CommonMark block constructs (MF1)**, from one whole-document
+  `pulldown-cmark` pass: **setext headings** (underline hidden), **indented code
+  blocks** (lazy continuations excluded), **task lists** (`- [ ] `/`- [x] ` →
+  `☐ `/`☑ `), **GFM tables** (header bold, pipes code), **reference links**
+  (`[text][ref]` resolved against a definition elsewhere), and **nested
+  lists/quotes** (indentation preserved; nested `> > ` collapses). New
+  `Marker { start, len, repl }` keeps indentation before a marker and an exact
+  delta.
+- **Step C — Typst blocks via `typst-syntax` tree (MF2).** Heading depth, list /
+  enum / term markers read from the grammar tree (`scan_typst`); marker byte
+  ranges (hence deltas) come from node ranges, so nested markers keep their
+  indentation. Enum `+ ` kept visible; term `/ ` hidden.
+- **Step D — per-token color channel (MF2).** Theme-independent `SynCat`
+  categories from the typst highlighter, resolved to RGBA at projection time via
+  a host `SynPalette` (precedence token > syntax > mark). `Theme` gains a syntax
+  palette; `Editor` calls the new `view::styled_runs_with`. `layout.rs` untouched
+  (colors flow through the already-hashed `Span.color`).
+- Tests: new `tests/commonmark.rs` (13) and `tests/typst_blocks.rs` (11), each
+  asserting display + byte delta + marks/colors and a byte-lossless caret-line
+  round-trip. perf_probe ≈ 17 ms warm at 4000 lines (no regression; one
+  whole-doc parse beats 4000 per-line parses).
+
 ## [0.3.0-alpha.1] — 2026-06-06
 
 ### Changed — parser-driven inline styling (full CommonMark + full Typst, inline)

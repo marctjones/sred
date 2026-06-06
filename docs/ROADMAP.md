@@ -146,10 +146,9 @@ fidelity suite against the **real notes corpus**; do a perf pass.
 
 ## Post-0.2.0 — full format support (parser-driven)
 
-> **Phase 2 (block-level) has a dedicated, cold-start-able plan:**
-> [`docs/MF_PHASE2.md`](MF_PHASE2.md) — architecture (doc-level analysis +
-> caret-aware projection), invariants, and a step-by-step implementation plan.
-> A fresh session can start from "start phase 2 for mf1/mf2" using that file.
+> **Phase 2 (block-level) is DONE** (0.3.0-alpha.2). The dedicated plan it was
+> built from is [`docs/MF_PHASE2.md`](MF_PHASE2.md) — architecture (doc-level
+> analysis + caret-aware projection), invariants, and the step-by-step plan.
 
 
 0.2.0 ships a **pragmatic, hand-rolled** recognizer: common Markdown constructs
@@ -165,21 +164,25 @@ project rule of leveraging existing libraries rather than duplicating them.
   `pulldown-cmark` (+ GFM strikethrough) and maps Strong/Emphasis/Code/
   Strikethrough/Link spans — spec-correct nesting, delimiter matching, code-span
   protection, links. Per-line projection/delta/marker-hiding machinery unchanged.
-- **Block: Phase 2 (todo).** Cross-line CommonMark constructs (reference-link
-  definitions, setext headings, nested lists/quotes, indented code, HTML blocks)
-  need document-level parsing rather than the per-line projection. Drive
-  `project_line_md` from a doc-level `OffsetIter` pass, keeping the incremental
-  caches (cache the parse per block, or accept pulldown's fast whole-doc parse).
+- **Block: DONE** (0.3.0-alpha.2). A single whole-document `pulldown-cmark`
+  `into_offset_iter()` pass (`scan_md`) drives setext headings, indented code
+  (lazy-continuation-aware), task lists, GFM tables, reference links, and nested
+  lists/quotes. Marker hiding + exact deltas via `Marker { start, len, repl }`;
+  styling split into caret-independent `analyze()` + caret-dependent `project()`,
+  with `ANALYSIS_CACHE` (by text) + `PROJECT_CACHE` (by per-line digest). See
+  `tests/commonmark.rs`. (HTML blocks remain a future nicety.)
 
 ### MF2 — Full Typst via `typst-syntax`
 - **Inline: DONE** (0.3.0-alpha). `line_marks_typst` walks `typst-syntax`'s
   `LinkedNode` tree using the crate's own `highlight()`/`Tag` categorizer —
   strong/emph/raw, math, refs/labels, and `#`-code-mode tokens. Supersedes the
   Level-1 hand-rolled recognizer.
-- **Block + color: Phase 2 (todo).** Drive `project_line_typst` (heading depth,
-  list/term markers, hiding) from the syntax tree; optionally map `Tag` → per-token
-  *colors* (keyword/function/number/string) instead of only the CODE mark, which
-  needs a color channel alongside `MarkSet` in the styling pass.
+- **Block + color: DONE** (0.3.0-alpha.2). `scan_typst` reads heading depth and
+  list/enum/term markers from the `typst-syntax` tree (marker byte ranges → exact
+  deltas, indentation preserved). Per-token *colors* (keyword/function/number/
+  string/comment/operator) flow through a `SynCat` channel resolved at projection
+  time via a host `SynPalette` (`Theme` syntax palette), alongside `MarkSet`. See
+  `tests/typst_blocks.rs`.
 
 ### MF3 — Rendered fragments (math / figures)
 - The hard part text-styling can't do: typeset `$…$` math and `#figure` output.

@@ -14,9 +14,12 @@ surface.
 > under one 60 fps frame regardless of note length). Noet consumes it as the sole
 > note editor today.
 >
-> **Next — 0.3.0:** full CommonMark (`pulldown-cmark`) and full Typst
-> (`typst-syntax`) styling, driven by the real parsers. See
-> [`docs/ROADMAP.md`](docs/ROADMAP.md) → "Post-0.2.0 — full format support".
+> **0.3.0 (in progress):** styling is driven entirely by the real parsers.
+> *Inline* (alpha.1) and *block-level* (alpha.2) CommonMark — setext headings,
+> indented code, task lists, GFM tables, reference links, nested lists/quotes —
+> plus Typst blocks read from the `typst-syntax` tree and per-token syntax colors.
+> See [`docs/ROADMAP.md`](docs/ROADMAP.md) → "Post-0.2.0 — full format support"
+> and [`docs/MF_PHASE2.md`](docs/MF_PHASE2.md).
 > Architecture + the sred↔Noet split: [`docs/DESIGN.md`](docs/DESIGN.md);
 > embedding guide: [`docs/INTEGRATION.md`](docs/INTEGRATION.md); performance
 > diagnosis: [`docs/PERF.md`](docs/PERF.md).
@@ -134,15 +137,17 @@ way today.
   line-splice updates + viewport-bounded rasterization + per-line styling cache.
   A keystroke (including Enter/paste) is under one 60 fps frame at any note length
   (4000 lines ≈ 13 ms, was ~1.9 s). See [`docs/PERF.md`](docs/PERF.md).
-- ✅ **Level-1 Typst** markup live-preview (format-aware projection).
+- ✅ **Parser-driven styling** (0.3.0-alpha) — inline + block-level CommonMark via
+  `pulldown-cmark` (setext, indented code, task lists, GFM tables, reference links,
+  nested lists/quotes) and Typst blocks via the `typst-syntax` tree, with
+  per-token syntax colors. Caret-independent `analyze()` + cheap `project()`.
 - ✅ **Syntect** code highlighting (`syntax-highlight` feature); scrolling
   (wheel + scrollbar + caret-follow); `can_undo()`/`can_redo()`.
 
 ### Known limitations (→ 0.3.0)
-- **Inline styling is pragmatic** (common Markdown + Level-1 Typst markup), and
-  **decoupled from fidelity** (the buffer is the source of truth). Spec-complete
-  CommonMark (`pulldown-cmark`) and full Typst (`typst-syntax`) are the 0.3.0
-  milestone.
+- **Styling is decoupled from fidelity** (the buffer is the source of truth); the
+  parser-driven marks/colors are cosmetic. HTML blocks are a remaining CommonMark
+  nicety; thematic breaks aren't yet specially styled.
 - **Rendered Typst** (math layout, figures) needs the Typst compiler — out of
   scope for the inline editor; hosts can keep a compiled preview.
 - **No IME / accessibility** on the image surface yet; `Theme` has no font-family.
