@@ -56,3 +56,41 @@ fn click_is_document_space_and_scroll_independent() {
         "document-space click must not change with scroll (no double-count)"
     );
 }
+
+#[test]
+fn token_chip_background_is_painted() {
+    use sred_core::{TokenMatch, TokenSpec};
+    let mut ed = Editor::from_source("see [[Project]] here", Format::Markdown);
+    ed.set_viewport(700, 300.0);
+    let bg = [220u8, 245, 230, 255];
+    ed.register_token(TokenSpec {
+        id: "wikilink".into(),
+        fg: [31, 122, 68, 255],
+        bg: Some(bg),
+        matcher: Box::new(|line: &str| {
+            let chars: Vec<char> = line.chars().collect();
+            let mut out = Vec::new();
+            let mut i = 0;
+            while i + 1 < chars.len() {
+                if chars[i] == '[' && chars[i + 1] == '[' {
+                    if let Some(c) = (i + 2..chars.len().saturating_sub(1))
+                        .find(|&k| chars[k] == ']' && chars[k + 1] == ']')
+                    {
+                        out.push(TokenMatch {
+                            start: i,
+                            end: c + 2,
+                            value: chars[i + 2..c].iter().collect(),
+                        });
+                        i = c + 2;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            out
+        }),
+    });
+    let out = ed.render(true);
+    let painted = out.frame.rgba.chunks_exact(4).any(|p| p == bg);
+    assert!(painted, "registered token chip background should be painted in the frame");
+}

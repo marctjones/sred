@@ -190,6 +190,7 @@ mod tests {
         let spec = view::TokenSpec {
             id: "x".into(),
             fg: [10, 20, 30, 255],
+            bg: None,
             matcher: Box::new(|_line: &str| {
                 vec![view::TokenMatch { start: 4, end: 11, value: "Project".into() }]
             }),

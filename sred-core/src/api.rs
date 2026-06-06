@@ -21,7 +21,7 @@
 use crate::editor::{Command, EditorCore};
 use crate::layout::{Caret, Frame, TextRenderer, Theme};
 use crate::model::Format;
-use crate::view::{Span, TokenSpec};
+use crate::view::{Decoration, Span, TokenSpec};
 
 /// One render's output for the host to display.
 pub struct FrameOut {
@@ -140,6 +140,29 @@ impl Editor {
         None
     }
 
+    /// Chip-background decorations for registered tokens that set `bg` (global
+    /// source-char ranges). Foreground coloring is applied in `styled_runs`.
+    fn token_decorations(&self) -> Vec<(usize, usize, Decoration)> {
+        if self.tokens.is_empty() {
+            return Vec::new();
+        }
+        let text = self.core.text();
+        let mut out = Vec::new();
+        let mut line_start = 0usize;
+        for line in text.split('\n') {
+            let n = line.chars().count();
+            for spec in &self.tokens {
+                if let Some(bg) = spec.bg {
+                    for m in (spec.matcher)(line) {
+                        out.push((line_start + m.start, line_start + m.end, Decoration::Chip(bg)));
+                    }
+                }
+            }
+            line_start += n + 1;
+        }
+        out
+    }
+
     fn styled(&self) -> (Vec<Span>, Vec<i32>) {
         crate::view::styled_runs(
             &self.core.text(),
@@ -212,7 +235,8 @@ impl Editor {
     /// caret on screen. Call after any input; push `FrameOut` to your UI.
     pub fn render(&mut self, follow: bool) -> FrameOut {
         let (spans, deltas) = self.styled();
-        let decorations = self.core.decorations();
+        let mut decorations = self.core.decorations();
+        decorations.extend(self.token_decorations());
         let text = self.core.text();
         let cursor = self.core.cursor();
         let selection = self.core.selection();

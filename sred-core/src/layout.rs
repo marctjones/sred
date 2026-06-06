@@ -159,6 +159,31 @@ impl TextRenderer {
             }
         }
 
+        // token chip backgrounds (behind the glyphs)
+        for &(s, e, deco) in decorations {
+            if let Decoration::Chip(color) = deco {
+                if s >= e {
+                    continue;
+                }
+                let cs = flat_to_render_cursor(text, deltas, s);
+                let ce = flat_to_render_cursor(text, deltas, e);
+                for run in buffer.layout_runs() {
+                    if let Some((x, w)) = run.highlight(cs, ce) {
+                        fill_rect(
+                            &mut rgba,
+                            width,
+                            height,
+                            x + theme.margin_x - 1.0,
+                            run.line_top + theme.margin_y,
+                            w.max(2.0) + 2.0,
+                            run.line_height,
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+
         let fg = Color::rgba(theme.fg[0], theme.fg[1], theme.fg[2], theme.fg[3]);
         let (mx, my) = (theme.margin_x as i32, theme.margin_y as i32);
         buffer.draw(&mut self.font_system, &mut self.swash, fg, |x, y, w, h, color| {
@@ -190,6 +215,7 @@ impl TextRenderer {
                     let (frac, color) = match deco {
                         Decoration::Strike => (0.55, theme.fg),
                         Decoration::Underline => (0.86, theme.link),
+                        Decoration::Chip(_) => continue, // drawn in the pre-glyph pass
                     };
                     let thick = (run.line_height * 0.06).max(1.5);
                     fill_rect(

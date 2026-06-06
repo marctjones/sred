@@ -33,6 +33,8 @@ pub struct Span {
 pub enum Decoration {
     Strike,
     Underline,
+    /// A filled chip background (RGBA) behind a token range — drawn before glyphs.
+    Chip([u8; 4]),
 }
 
 /// Build styled layout runs + per-line prefix bytes (always 0 here — markers are
@@ -50,6 +52,8 @@ pub struct TokenMatch {
 pub struct TokenSpec {
     pub id: String,
     pub fg: [u8; 4],
+    /// Optional chip background (RGBA) behind the matched text.
+    pub bg: Option<[u8; 4]>,
     pub matcher: Box<dyn Fn(&str) -> Vec<TokenMatch>>,
 }
 
