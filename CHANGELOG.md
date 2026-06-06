@@ -3,6 +3,16 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.2.0-alpha.3] — 2026-06-06
+
+### Performance
+- **Memoized syntect highlighting per code block** (Tier 3) — unchanged fenced
+  code blocks are no longer re-highlighted on every keystroke (thread-local cache
+  keyed by `(lang, body)` content hash).
+- Added `docs/PERF.md` — per-keystroke cost diagnosis and the perceived-snappiness
+  plan (Tier 1: defer off-screen work [host-side, done in Noet]; Tier 2:
+  viewport-bounded rendering; Tier 3: syntect cache / buffer reuse).
+
 ## [0.2.0-alpha.2] — 2026-06-05
 
 ### Performance
@@ -62,3 +72,4 @@ model with reconstructive save (superseded by the 0.2 source-anchored core).
 [0.2.0-alpha.1]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.1
 [0.1.0]: https://github.com/marctjones/sred/releases/tag/v0.1.0
 [0.2.0-alpha.2]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.2
+[0.2.0-alpha.3]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.3
