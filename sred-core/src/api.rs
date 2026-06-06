@@ -278,4 +278,47 @@ impl Editor {
             doc_height,
         }
     }
+
+    /// Viewport-bounded render: rasterizes **only the visible slice**, so the
+    /// returned image is viewport-sized and the per-keystroke alloc + GPU upload
+    /// are flat regardless of document length. Caret-follow is applied inside
+    /// the same shaping pass (the rasterized slice always matches the resolved
+    /// scroll — typing at the bottom can't paint a stale frame).
+    ///
+    /// Unlike [`render`](Self::render), in the returned [`FrameOut`]:
+    /// - `frame` is **viewport-sized** — display it at a *fixed* position, not
+    ///   inside a scrolled `Flickable` content area.
+    /// - `caret` is in **viewport-relative** coordinates (already minus scroll).
+    /// - `doc_height` is the full scrollable height (size your scrollbar to it);
+    ///   scroll by calling [`scroll_by`](Self::scroll_by) / [`scroll_to`] and
+    ///   re-rendering.
+    pub fn render_view(&mut self, follow: bool) -> FrameOut {
+        let text = self.core.text();
+        let (spans, deltas) = self.styled_with(&text);
+        let mut decorations = crate::view::decorations(&text, self.core.format());
+        decorations.extend(self.token_decorations_with(&text));
+        let cursor = self.core.cursor();
+        let selection = self.core.selection();
+
+        let out = self.renderer.render_viewport(
+            &spans,
+            &text,
+            &deltas,
+            &decorations,
+            self.width,
+            self.viewport_h as u32,
+            self.scroll_y,
+            follow,
+            &self.theme,
+            cursor,
+            selection,
+        );
+        self.scroll_y = out.scroll_y;
+        FrameOut {
+            frame: out.frame,
+            caret: out.caret,
+            scroll_y: out.scroll_y,
+            doc_height: out.doc_height,
+        }
+    }
 }
