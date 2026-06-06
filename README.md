@@ -98,26 +98,40 @@ manual via `cargo run -p sred-demo`.
       `Raw` chips, IME, rich/plain clipboard
 - [ ] **Phase 6** — multi-line block spacing, dirty-region re-raster, GPU glyph path
 
-## 0.2 progress
+## Embedding (the reusable surface)
 
-- **M1 (source-anchored core) — landed.** The editor was re-architected: the raw
-  markdown text is now the buffer (`ropey::Rope`), edits splice it, and `text()`
-  is **byte-lossless** (`cargo test -p sred-core --test fidelity` — round-trips a
-  corpus incl. CRLF, trailing whitespace, nested lists, HTML, tables, todo lines,
-  unicode). The rich view (`view.rs`) styles markers *in place* (visible-marker
-  "live-preview-lite"): `#`/`**`/`- ` stay in the source and are styled. Toolbar
-  actions now write real markers (`Bold` → `**…**`, `H2` → `## `).
-- Remaining 0.2 milestones (M2–M8): scrolling, host theming/scale, embeddable
-  binding + Slint 1.13 alignment, inline-token & block-widget extension APIs,
-  a11y/test parity, and Noet integration. See `docs/ROADMAP.md`.
+Depend on **`sred-core`** (UI-free, Slint-version-independent) and drive one
+`Editor`:
+
+```rust
+use sred_core::{Editor, Command, Format};
+let mut ed = Editor::from_source(&note_body, Format::Markdown);
+ed.set_theme(my_theme); ed.set_viewport(w, h);
+ed.apply(Command::Insert("x".into()));      // or click/drag/scroll/…
+let out = ed.render(/* follow caret */ true); // -> RGBA frame + caret + scroll
+backend.save(ed.text());                      // byte-lossless
+```
+
+Register domain tokens (`[[wikilink]]`/`#tag`/…) with colors + chip backgrounds
+via `register_token`, and resolve clicks with `token_at`. Full guide:
+[`docs/INTEGRATION.md`](docs/INTEGRATION.md). [Noet](../notes) consumes sred this
+way today.
+
+## 0.2 progress (see `CHANGELOG.md`)
+
+- ✅ **Source-anchored core** — byte-lossless `text()` (fidelity corpus test).
+- ✅ **Live Preview** — caret-aware hiding of block markers + ``` ` ``` fences.
+- ✅ **Syntect** code highlighting (`syntax-highlight` feature).
+- ✅ **Scrolling** — wheel + scrollbar + caret-follow; 16px margins.
+- ✅ **Embeddable `Editor` facade** + **domain-token extension API** (fg + chip bg).
+- ◻ Viewport-bounded rendering (perf), hidden inline markers, IME/a11y, font-family.
 
 ### Current simplifications
 - **Inline styling is pragmatic** (non-nested common cases) and **decoupled from
-  fidelity** — the buffer is the source of truth, so styling accuracy can be
-  refined without risking the saved bytes.
-- **Hidden-marker "true" Live Preview** (reveal `**`/`#` only at the caret) is
-  post-0.2; markers are currently always visible.
-- **Full re-raster per edit.** Viewport-bounded rendering is M2.
+  fidelity** — the buffer is the source of truth.
+- **Full whole-document re-raster per edit.** Viewport-bounded rendering is the
+  next perf item (a first attempt is parked on `m2-viewport`).
+- **No IME / accessibility** on the image surface yet; `Theme` has no font-family.
 
 ## Build & requirements
 

@@ -4643,7 +4643,7 @@ dependencies = [
 
 [[package]]
 name = "sred-core"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "bitflags 2.12.1",
  "cosmic-text",
@@ -4656,7 +4656,7 @@ dependencies = [
 
 [[package]]
 name = "sred-demo"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "slint",
  "sred-slint",
@@ -4664,7 +4664,7 @@ dependencies = [
 
 [[package]]
 name = "sred-slint"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "arboard",
  "i-slint-backend-testing",
