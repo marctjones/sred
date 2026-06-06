@@ -3,6 +3,34 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.2.0] — 2026-06-06
+
+**Milestone: sred is usable as [Noet](../notes)'s primary editor.** Rolls up the
+`0.2.0-alpha.*` line. sred is now a **byte-lossless, source-anchored** Markdown /
+Typst editor with Obsidian-style **Live Preview**, an embeddable `Editor` facade,
+a domain-token extension API, host theming, and **flat per-keystroke performance**
+(a keystroke — including Enter/paste — stays under one 60 fps frame regardless of
+note length). Noet consumes it as the sole note editor.
+
+Highlights since 0.1.0 (see the `alpha.*` entries below for detail):
+- **Source-anchored core** — the raw text *is* the buffer (`ropey::Rope`); `text()`
+  round-trips byte-for-byte (fidelity corpus test). Replaces the 0.1 structured
+  model that normalized on save.
+- **Live Preview** — caret-aware hiding of block markers + code fences.
+- **Embeddable `Editor` facade** + **domain-token API** (fg colors + chip
+  backgrounds; `token_at` click resolution) + host `Theme` + scrolling.
+- **Flat performance** — viewport-bounded rendering, incremental persistent
+  cosmic-text buffer, prefix/suffix line splice, per-line styling cache.
+- **Level-1 Typst** markup live-preview; `Editor::can_undo()/can_redo()`.
+
+### Known limitations (targeted for 0.3.0)
+- Inline styling is **pragmatic** (common Markdown + Level-1 Typst markup), and
+  decoupled from fidelity. **Spec-complete CommonMark (`pulldown-cmark`) and full
+  Typst (`typst-syntax`)** are the 0.3.0 milestone.
+- Rendered Typst (math layout, figures) needs the Typst compiler (out of scope
+  for the inline editor; hosts can keep a compiled preview).
+- No IME / accessibility on the image surface yet; `Theme` has no font-family.
+
 ## [0.2.0-alpha.6] — 2026-06-06
 
 ### Added — Level 1 Typst markup live-preview
@@ -137,3 +165,4 @@ model with reconstructive save (superseded by the 0.2 source-anchored core).
 [0.2.0-alpha.4]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.4
 [0.2.0-alpha.5]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.5
 [0.2.0-alpha.6]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.6
+[0.2.0]: https://github.com/marctjones/sred/releases/tag/v0.2.0

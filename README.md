@@ -5,16 +5,21 @@ reusable Slint component. The hard parts (document model, text shaping, cursor,
 hit-testing, backends) live in UI-free Rust; Slint is a thin render + input
 surface.
 
-> ### 🎯 Release target — **0.2.0: usable as [Noet](../notes)'s primary editor**
-> sred is being driven toward replacing the raw-markdown editor in the Noet notes
-> app. That requires a pivot to **byte-lossless, source-anchored editing** plus an
-> extension API for domain tokens, theming, and scrolling. The plan lives in:
-> - [`docs/DESIGN.md`](docs/DESIGN.md) — architecture, the source-anchored model, the extension API, sred↔Noet responsibility split.
-> - [`docs/ROADMAP.md`](docs/ROADMAP.md) — milestones M1–M8 toward 0.2.0 with acceptance gates.
-> - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — per-milestone task breakdown.
+> ### ✅ **0.2.0 — released: [Noet](../notes)'s primary editor**
+> sred is a **byte-lossless, source-anchored** editor: the raw Markdown/Typst text
+> *is* the buffer, so `text()` round-trips byte-for-byte. It renders inline
+> (Obsidian-style **Live Preview** — markers hidden off the caret line), embeds via
+> a small `Editor` facade, exposes a **domain-token** extension API, and has
+> **flat per-keystroke performance** (a keystroke — including Enter/paste — stays
+> under one 60 fps frame regardless of note length). Noet consumes it as the sole
+> note editor today.
 >
-> The phased status below describes the **current 0.1.0** standalone editor; where
-> it conflicts with the docs above, the docs win for 0.2 work.
+> **Next — 0.3.0:** full CommonMark (`pulldown-cmark`) and full Typst
+> (`typst-syntax`) styling, driven by the real parsers. See
+> [`docs/ROADMAP.md`](docs/ROADMAP.md) → "Post-0.2.0 — full format support".
+> Architecture + the sred↔Noet split: [`docs/DESIGN.md`](docs/DESIGN.md);
+> embedding guide: [`docs/INTEGRATION.md`](docs/INTEGRATION.md); performance
+> diagnosis: [`docs/PERF.md`](docs/PERF.md).
 
 ## Workspace
 
@@ -60,7 +65,7 @@ Feature coverage:
 
 ## Testing
 
-`cargo test` (20 tests). Three layers:
+`cargo test` (40+ tests). Layers:
 
 - **`sred-core` unit tests (12)** — headless logic: Markdown/Typst round-trip
   fixpoints, cross-format mark survival, block-structure survival, autoformat
@@ -94,9 +99,12 @@ manual via `cargo run -p sred-demo`.
       edit→save** (tested in `block_structure_survives_edit_cycle`)
 - [x] **Menu + toolbar** — full Markdown/Typst feature set via one `command()` dispatch
 - [x] **Undo/redo** — snapshot history with typing-run coalescing (Ctrl-Z / Ctrl-Y), tested
-- [ ] **Phase 5** — rich link/image/math editing (vs. literal snippets), Typst
-      `Raw` chips, IME, rich/plain clipboard
-- [ ] **Phase 6** — multi-line block spacing, dirty-region re-raster, GPU glyph path
+- [x] **Performance** — flat per-keystroke cost: incremental persistent cosmic-text
+      buffer + line-splice + viewport-bounded raster + per-line styling cache
+- [x] **Live Preview + viewport rendering** — markers hidden off-caret; viewport-sized
+      frames via `render_view`
+- [ ] **0.3.0** — full CommonMark (`pulldown-cmark`) + full Typst (`typst-syntax`)
+      styling; rich link/image/math editing; IME / accessibility
 
 ## Embedding (the reusable surface)
 
@@ -107,8 +115,8 @@ Depend on **`sred-core`** (UI-free, Slint-version-independent) and drive one
 use sred_core::{Editor, Command, Format};
 let mut ed = Editor::from_source(&note_body, Format::Markdown);
 ed.set_theme(my_theme); ed.set_viewport(w, h);
-ed.apply(Command::Insert("x".into()));      // or click/drag/scroll/…
-let out = ed.render(/* follow caret */ true); // -> RGBA frame + caret + scroll
+ed.apply(Command::Insert("x".into()));        // or click/drag/scroll/…
+let out = ed.render_view(/* follow caret */ true); // viewport-sized RGBA + caret + scroll
 backend.save(ed.text());                      // byte-lossless
 ```
 
@@ -117,20 +125,26 @@ via `register_token`, and resolve clicks with `token_at`. Full guide:
 [`docs/INTEGRATION.md`](docs/INTEGRATION.md). [Noet](../notes) consumes sred this
 way today.
 
-## 0.2 progress (see `CHANGELOG.md`)
+## 0.2.0 — what's in it (see `CHANGELOG.md`)
 
 - ✅ **Source-anchored core** — byte-lossless `text()` (fidelity corpus test).
 - ✅ **Live Preview** — caret-aware hiding of block markers + ``` ` ``` fences.
-- ✅ **Syntect** code highlighting (`syntax-highlight` feature).
-- ✅ **Scrolling** — wheel + scrollbar + caret-follow; 16px margins.
 - ✅ **Embeddable `Editor` facade** + **domain-token extension API** (fg + chip bg).
-- ◻ Viewport-bounded rendering (perf), hidden inline markers, IME/a11y, font-family.
+- ✅ **Flat per-keystroke performance** — incremental persistent buffer +
+  line-splice updates + viewport-bounded rasterization + per-line styling cache.
+  A keystroke (including Enter/paste) is under one 60 fps frame at any note length
+  (4000 lines ≈ 13 ms, was ~1.9 s). See [`docs/PERF.md`](docs/PERF.md).
+- ✅ **Level-1 Typst** markup live-preview (format-aware projection).
+- ✅ **Syntect** code highlighting (`syntax-highlight` feature); scrolling
+  (wheel + scrollbar + caret-follow); `can_undo()`/`can_redo()`.
 
-### Current simplifications
-- **Inline styling is pragmatic** (non-nested common cases) and **decoupled from
-  fidelity** — the buffer is the source of truth.
-- **Full whole-document re-raster per edit.** Viewport-bounded rendering is the
-  next perf item (a first attempt is parked on `m2-viewport`).
+### Known limitations (→ 0.3.0)
+- **Inline styling is pragmatic** (common Markdown + Level-1 Typst markup), and
+  **decoupled from fidelity** (the buffer is the source of truth). Spec-complete
+  CommonMark (`pulldown-cmark`) and full Typst (`typst-syntax`) are the 0.3.0
+  milestone.
+- **Rendered Typst** (math layout, figures) needs the Typst compiler — out of
+  scope for the inline editor; hosts can keep a compiled preview.
 - **No IME / accessibility** on the image surface yet; `Theme` has no font-family.
 
 ## Build & requirements
