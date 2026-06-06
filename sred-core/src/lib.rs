@@ -151,7 +151,7 @@ mod tests {
     fn fenced_code_block_gets_syntect_colors() {
         // A highlighted code block should produce more than one foreground color.
         let src = "```rust\nfn main() { let x = 1; }\n```\n";
-        let (spans, _) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[]);
+        let (spans, _) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[], 0);
         let colors: std::collections::HashSet<[u8; 4]> =
             spans.iter().filter_map(|s| s.color).collect();
         assert!(
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn live_preview_hides_markers_off_caret_line() {
         let src = "para\n## Heading\n- item";
-        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[]); // caret line 0
+        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[], 0); // caret line 0
         let display: String = spans.iter().map(|s| s.text.as_str()).collect();
         assert!(display.contains("Heading"));
         assert!(
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn live_preview_reveals_markers_on_caret_line() {
         let src = "## Heading";
-        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[]); // caret on line 0
+        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[], 0); // caret on line 0
         let display: String = spans.iter().map(|s| s.text.as_str()).collect();
         assert!(display.contains("## Heading"), "caret line shows the raw marker: {display:?}");
         assert_eq!(deltas[0], 0);
@@ -196,12 +196,62 @@ mod tests {
             }),
         };
         let (spans, _) = view::styled_runs(
-            "see [[Project]] x", Format::Markdown, 16.0, 0, std::slice::from_ref(&spec),
+            "see [[Project]] x", Format::Markdown, 16.0, 0, std::slice::from_ref(&spec), 0,
         );
         assert!(
             spans.iter().any(|s| s.color == Some([10, 20, 30, 255])),
             "registered token color should appear in the rendered spans"
         );
+    }
+
+    #[test]
+    fn styling_cache_matches_fresh_computation() {
+        // The per-line styling cache must produce byte-identical spans + deltas +
+        // decorations to a from-scratch (cache-cleared) computation — across
+        // edits, caret moves, tokens, and a code fence (code lines aren't cached).
+        fn spans_eq(a: &[view::Span], b: &[view::Span]) -> bool {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(x, y)| {
+                    x.text == y.text && x.marks == y.marks && x.color == y.color && x.size == y.size
+                })
+        }
+        let spec = view::TokenSpec {
+            id: "p".into(),
+            fg: [9, 8, 7, 255],
+            bg: None,
+            matcher: Box::new(|line: &str| {
+                line.match_indices("[[P]]")
+                    .map(|(i, _)| view::TokenMatch {
+                        start: line[..i].chars().count(),
+                        end: line[..i].chars().count() + 5,
+                        value: "P".into(),
+                    })
+                    .collect()
+            }),
+        };
+        let seq = [
+            "# Title\n- a\n> quote\nplain **bold** ~~x~~ [[P]]\n```rust\nlet a=1;\n```\ntail",
+            "# Title\n- aZ\n> quote\nplain **bold** ~~x~~ [[P]]\n```rust\nlet a=1;\n```\ntail",
+            "# TitleQ\n- aZ\n> quote\nplain **bold** ~~x~~ [[P]]\n```rust\nlet a=12;\n```\ntail",
+        ];
+        for tokens_gen in [0u64, 7] {
+            let toks: &[view::TokenSpec] =
+                if tokens_gen == 0 { &[] } else { std::slice::from_ref(&spec) };
+            for caret in [0usize, 1, 4, 5] {
+                for t in seq {
+                    let inc = view::styled_runs(t, Format::Markdown, 16.0, caret, toks, tokens_gen);
+                    let inc_d = view::decorations(t, Format::Markdown);
+                    view::clear_style_cache();
+                    let fresh = view::styled_runs(t, Format::Markdown, 16.0, caret, toks, tokens_gen);
+                    let fresh_d = view::decorations(t, Format::Markdown);
+                    assert!(
+                        spans_eq(&inc.0, &fresh.0) && inc.1 == fresh.1,
+                        "styled cache != fresh (gen={tokens_gen} caret={caret} t={t:?})"
+                    );
+                    assert_eq!(inc_d, fresh_d, "deco cache != fresh (t={t:?})");
+                }
+            }
+        }
     }
 
     #[test]

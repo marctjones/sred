@@ -186,7 +186,7 @@ impl EditorCore {
     }
 
     pub fn styled_runs(&self, base: f32) -> (Vec<Span>, Vec<i32>) {
-        crate::view::styled_runs(&self.text(), self.format, base, self.cursor_line(), &[])
+        crate::view::styled_runs(&self.text(), self.format, base, self.cursor_line(), &[], 0)
     }
 
     pub fn decorations(&self) -> Vec<(usize, usize, Decoration)> {

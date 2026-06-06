@@ -11,8 +11,8 @@
 //! block/line).
 
 use cosmic_text::{
-    Attrs, AttrsList, Buffer, Color, Cursor, Family, FontSystem, LineEnding, Metrics, Shaping,
-    Style, SwashCache, Weight,
+    Attrs, AttrsList, Buffer, BufferLine, Color, Cursor, Family, FontSystem, LineEnding, Metrics,
+    Shaping, Style, SwashCache, Weight,
 };
 
 use crate::editor::{Decoration, Span};
@@ -154,9 +154,10 @@ impl TextRenderer {
         // Full rebuild if metrics/width changed, the line count changed (Enter /
         // delete-line / paste), or there's no cached buffer yet. Line splitting
         // must match cosmic-text's: structural divergence falls back here safely.
-        let reusable =
-            self.cache_buf.is_some() && self.cache_key == key && self.cache_sigs.len() == lines.len();
-        if !reusable {
+        // A full rebuild is only needed when there's no buffer yet or the render
+        // parameters (width / metrics) changed. Line insertions/deletions are
+        // handled incrementally below.
+        if self.cache_buf.is_none() || self.cache_key != key {
             let buffer = self.build_buffer(spans, full_width, theme);
             self.cache_sigs = lines.iter().map(|l| l.sig).collect();
             self.cache_key = key;
@@ -164,42 +165,43 @@ impl TextRenderer {
         }
 
         let mut buffer = self.cache_buf.take().unwrap();
-        // Defensive: if our line split ever disagrees with cosmic-text's actual
-        // line count (e.g. CRLF or a Unicode paragraph separator we don't split
-        // on), fall back to a full rebuild rather than mis-index lines.
-        if buffer.lines.len() != lines.len() {
+        // Defensive: if our cached line count ever disagrees with the buffer's
+        // actual line count (e.g. a Unicode paragraph separator we don't split
+        // on slipped in), fall back to a full rebuild rather than mis-splice.
+        if buffer.lines.len() != self.cache_sigs.len() {
             let nb = self.build_buffer(spans, full_width, theme);
             self.cache_sigs = lines.iter().map(|l| l.sig).collect();
             self.cache_key = key;
             return nb;
         }
-        let default_attrs = Attrs::new();
-        let mut dirty = false;
-        for (i, lp) in lines.iter().enumerate() {
-            if self.cache_sigs[i] == lp.sig {
-                continue;
-            }
-            let mut text = String::new();
-            let mut attrs_list = AttrsList::new(&default_attrs);
-            for &(t, marks, color, size) in &lp.runs {
-                let start = text.len();
-                text.push_str(t);
-                let end = text.len();
-                if start < end {
-                    let attrs =
-                        attrs_for(marks, color, theme).metrics(Metrics::new(size, size * 1.4));
-                    attrs_list.add_span(start..end, &attrs);
-                }
-            }
-            buffer.lines[i].reset_new(text, LineEnding::default(), attrs_list, Shaping::Advanced);
-            self.cache_sigs[i] = lp.sig;
-            dirty = true;
+
+        // Diff old vs new line signatures by common prefix + suffix, then splice
+        // only the changed middle. This keeps single-line edits O(1) AND makes
+        // line insert/delete (Enter, Backspace-join, paste) cost O(changed lines
+        // + tail shift) instead of rebuilding the whole document.
+        let new_sigs: Vec<u64> = lines.iter().map(|l| l.sig).collect();
+        let (ol, nl) = (self.cache_sigs.len(), new_sigs.len());
+        let mut p = 0;
+        while p < ol && p < nl && self.cache_sigs[p] == new_sigs[p] {
+            p += 1;
         }
-        if dirty {
-            // Re-layout: unchanged lines hit cosmic-text's shape cache (cheap);
-            // only the reset lines actually re-shape.
-            buffer.shape_until_scroll(&mut self.font_system, false);
+        let mut s = 0;
+        while s < ol - p && s < nl - p && self.cache_sigs[ol - 1 - s] == new_sigs[nl - 1 - s] {
+            s += 1;
         }
+        if p == ol && p == nl {
+            // Nothing changed (e.g. a scroll-only re-render) — buffer is current.
+            return buffer;
+        }
+        let rebuilt: Vec<BufferLine> = (p..nl - s)
+            .map(|i| make_buffer_line(&lines[i], theme))
+            .collect();
+        buffer.lines.splice(p..ol - s, rebuilt);
+        self.cache_sigs
+            .splice(p..ol - s, new_sigs[p..nl - s].iter().copied());
+        // Re-layout: unchanged lines hit cosmic-text's shape cache (cheap); only
+        // the spliced lines actually re-shape.
+        buffer.shape_until_scroll(&mut self.font_system, false);
         buffer
     }
 
@@ -771,6 +773,25 @@ fn visible_source_range(vis: &[cosmic_text::LayoutRun], text: &str, deltas: &[i3
     (flat_of(text, min_line, 0), flat_of(text, max_line + 1, 0))
 }
 
+/// Build a cosmic-text `BufferLine` (unshaped) for one display line, matching
+/// exactly what `set_rich_text` would produce for it (same text + AttrsList +
+/// metrics + line ending) so layout/caret/hit geometry are unaffected.
+fn make_buffer_line(lp: &LineParts, theme: &Theme) -> BufferLine {
+    let default_attrs = Attrs::new();
+    let mut text = String::new();
+    let mut attrs_list = AttrsList::new(&default_attrs);
+    for &(t, marks, color, size) in &lp.runs {
+        let start = text.len();
+        text.push_str(t);
+        let end = text.len();
+        if start < end {
+            let attrs = attrs_for(marks, color, theme).metrics(Metrics::new(size, size * 1.4));
+            attrs_list.add_span(start..end, &attrs);
+        }
+    }
+    BufferLine::new(text, LineEnding::default(), attrs_list, Shaping::Advanced)
+}
+
 /// Signature of the render parameters that, when changed, require a full buffer
 /// rebuild rather than a per-line update.
 fn theme_key(theme: &Theme, shaping_w: f32) -> u64 {
@@ -959,6 +980,19 @@ mod tests {
             &["a\nb\nc", "a\nb\nc\nd", "a\nb\nc\nD"],
             0,
         );
+    }
+
+    #[test]
+    fn incremental_line_insert_delete_matches_full() {
+        // The prefix/suffix splice must match a full rebuild for every shape of
+        // line-count change: middle insert, middle delete, Enter-split,
+        // Backspace-join, and append past a trailing newline.
+        assert_inc_eq_full(&["a\nb\nc\nd", "a\nb\nX\nc\nd"], 0); // insert in middle
+        assert_inc_eq_full(&["a\nb\nc\nd", "a\nd"], 0); // delete middle lines
+        assert_inc_eq_full(&["hello world", "hello\nworld"], 0); // Enter split
+        assert_inc_eq_full(&["hello\nworld", "helloworld"], 0); // backspace join
+        assert_inc_eq_full(&["a\nb\nc\n", "a\nb\nc\nd"], 8); // append past trailing newline
+        assert_inc_eq_full(&["# H\nbody\n- x\n- y", "# H\nbody\n- x\n- mid\n- y"], 0); // insert bullet
     }
 
     #[test]

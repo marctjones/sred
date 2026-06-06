@@ -21,6 +21,7 @@ use crate::model::{Format, MarkSet};
 type CodeHighlights = HashMap<usize, Vec<(usize, usize, [u8; 4])>>;
 
 /// A contiguous run of identically-styled text for layout.
+#[derive(Clone)]
 pub struct Span {
     pub text: String,
     pub marks: MarkSet,
@@ -57,12 +58,78 @@ pub struct TokenSpec {
     pub matcher: Box<dyn Fn(&str) -> Vec<TokenMatch>>,
 }
 
+thread_local! {
+    // Per-prose-line styled spans + delta, keyed by `prose_key`. Lets a keystroke
+    // re-style only the line(s) that changed instead of re-scanning the whole
+    // document. Code lines are never cached (their highlight colors depend on
+    // block context). Bounded; cleared wholesale when large.
+    static STYLE_CACHE: std::cell::RefCell<HashMap<u64, (Vec<Span>, i32)>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Cache key for a prose line's styling. Includes everything its spans depend
+/// on: the text, whether it's the caret line (markers shown vs hidden), the base
+/// font size, and the host's token generation (bumped when tokens change).
+fn prose_key(line: &str, on_caret: bool, base: f32, tokens_gen: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    line.hash(&mut h);
+    on_caret.hash(&mut h);
+    base.to_bits().hash(&mut h);
+    tokens_gen.hash(&mut h);
+    h.finish()
+}
+
+/// Style one non-code (prose) line: project block markers (Live Preview), scan
+/// inline marks, apply token colors, and emit spans. A pure function of its
+/// inputs, so its result is safe to memoize in `STYLE_CACHE`.
+fn style_prose_line(line: &str, base: f32, on_caret: bool, tokens: &[TokenSpec]) -> (Vec<Span>, i32) {
+    let (display, delta, size, extra) = project_line(line, base, on_caret, false);
+    let chars: Vec<char> = display.chars().collect();
+    let mut charmarks = line_marks(&display);
+    for x in &mut charmarks {
+        *x |= extra;
+    }
+    let mut charcolors: Vec<Option<[u8; 4]>> = vec![None; chars.len()];
+    if !tokens.is_empty() {
+        for spec in tokens {
+            for m in (spec.matcher)(&display) {
+                for slot in charcolors
+                    .iter_mut()
+                    .take(m.end.min(chars.len()))
+                    .skip(m.start.min(chars.len()))
+                {
+                    *slot = Some(spec.fg);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut j = 0;
+    while j < chars.len() {
+        let mk = charmarks[j];
+        let col = charcolors[j];
+        let start = j;
+        while j < chars.len() && charmarks[j] == mk && charcolors[j] == col {
+            j += 1;
+        }
+        out.push(Span {
+            text: chars[start..j].iter().collect(),
+            marks: mk,
+            color: col,
+            size,
+        });
+    }
+    (out, delta)
+}
+
 pub fn styled_runs(
     text: &str,
     _format: Format,
     base: f32,
     caret_line: usize,
     tokens: &[TokenSpec],
+    tokens_gen: u64,
 ) -> (Vec<Span>, Vec<i32>) {
     let lines: Vec<&str> = text.split('\n').collect();
     let highlights = code_highlights(text);
@@ -89,72 +156,66 @@ pub fn styled_runs(
             in_fence = !in_fence;
         }
         let on_caret = li == caret_line;
-
-        // Caret-aware Live Preview: hide ``` fences off the caret line (the code
-        // block renders without the delimiters); code content shows as-is;
-        // markdown lines hide/substitute their block markers off the caret line.
-        let (display, delta, size, extra) = if is_fence {
-            if on_caret {
-                (line.to_string(), 0, base, MarkSet::CODE)
-            } else {
-                (String::new(), -(line.len() as i32), base, MarkSet::CODE)
-            }
-        } else if interior {
-            (line.to_string(), 0, base, MarkSet::CODE)
-        } else {
-            project_line(line, base, on_caret, false)
-        };
-        deltas.push(delta);
         let line_is_code = is_fence || interior;
-        let display: &str = &display;
 
-        let chars: Vec<char> = display.chars().collect();
-        let charmarks: Vec<MarkSet> = if line_is_code {
-            vec![MarkSet::CODE; chars.len()]
-        } else {
-            let mut m = line_marks(display);
-            for x in &mut m {
-                *x |= extra;
-            }
-            m
-        };
-        // Per-char syntax-highlight colors for code lines (empty when the
-        // feature is off, so code falls back to the uniform CODE color).
-        let mut charcolors: Vec<Option<[u8; 4]>> = if line_is_code {
-            line_code_colors(highlights.get(&li), chars.len())
-        } else {
-            vec![None; chars.len()]
-        };
-        // Host-registered domain tokens (wikilinks/tags/mentions/url) — color the
-        // matched chars. Run on the displayed text so columns line up.
-        if !line_is_code && !tokens.is_empty() {
-            for spec in tokens {
-                for m in (spec.matcher)(display) {
-                    for slot in charcolors.iter_mut().take(m.end.min(chars.len())).skip(m.start.min(chars.len())) {
-                        *slot = Some(spec.fg);
-                    }
+        if line_is_code {
+            // Code lines: highlight colors depend on block context, so they are
+            // recomputed (the underlying syntect highlight is itself cached).
+            let (display, delta) = if is_fence {
+                if on_caret {
+                    (line.to_string(), 0)
+                } else {
+                    (String::new(), -(line.len() as i32))
                 }
+            } else {
+                (line.to_string(), 0)
+            };
+            deltas.push(delta);
+            let chars: Vec<char> = display.chars().collect();
+            let charcolors = line_code_colors(highlights.get(&li), chars.len());
+            let mut j = 0;
+            while j < chars.len() {
+                let col = charcolors[j];
+                let start = j;
+                while j < chars.len() && charcolors[j] == col {
+                    j += 1;
+                }
+                spans.push(Span {
+                    text: chars[start..j].iter().collect(),
+                    marks: MarkSet::CODE,
+                    color: col,
+                    size: base,
+                });
             }
-        }
-
-        let mut j = 0;
-        while j < chars.len() {
-            let mk = charmarks[j];
-            let col = charcolors[j];
-            let start = j;
-            while j < chars.len() && charmarks[j] == mk && charcolors[j] == col {
-                j += 1;
-            }
-            spans.push(Span {
-                text: chars[start..j].iter().collect(),
-                marks: mk,
-                color: col,
-                size,
+        } else {
+            // Prose lines: memoize per (text, on-caret, base, token-gen).
+            let key = prose_key(line, on_caret, base, tokens_gen);
+            let (line_spans, delta) = STYLE_CACHE.with(|c| {
+                if let Some(hit) = c.borrow().get(&key) {
+                    return hit.clone();
+                }
+                let computed = style_prose_line(line, base, on_caret, tokens);
+                let mut m = c.borrow_mut();
+                if m.len() > 16384 {
+                    m.clear();
+                }
+                m.insert(key, computed.clone());
+                computed
             });
+            deltas.push(delta);
+            spans.extend(line_spans);
         }
     }
 
     (spans, deltas)
+}
+
+/// Test/maintenance hook: drop the styling caches (so a fresh computation can be
+/// compared against the incremental one).
+#[cfg(test)]
+pub(crate) fn clear_style_cache() {
+    STYLE_CACHE.with(|c| c.borrow_mut().clear());
+    DECO_CACHE.with(|c| c.borrow_mut().clear());
 }
 
 /// Project a source line to its displayed form. On a revealed line (caret line /
@@ -209,6 +270,21 @@ fn line_code_colors(
     out
 }
 
+thread_local! {
+    // Per-prose-line strike/underline ranges (line-relative char offsets), keyed
+    // by line text. Lets a keystroke re-scan only changed lines. Code lines are
+    // never cached. Bounded; cleared wholesale when large.
+    static DECO_CACHE: std::cell::RefCell<HashMap<u64, Vec<(usize, usize, Decoration)>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+fn deco_key(line: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    line.hash(&mut h);
+    h.finish()
+}
+
 /// Strike (`~~…~~`) and underline (links) ranges in global char offsets.
 pub fn decorations(text: &str, _format: Format) -> Vec<(usize, usize, Decoration)> {
     let mut out = Vec::new();
@@ -221,9 +297,27 @@ pub fn decorations(text: &str, _format: Format) -> Vec<(usize, usize, Decoration
             in_fence = !in_fence;
         }
         if !line_is_code {
-            let m = line_marks(line);
-            push_runs(&m, MarkSet::STRIKE, Decoration::Strike, global, &mut out);
-            push_runs(&m, MarkSet::LINK, Decoration::Underline, global, &mut out);
+            let key = deco_key(line);
+            // Cached ranges are line-relative; shift them by the line's global
+            // char offset.
+            let rel = DECO_CACHE.with(|c| {
+                if let Some(hit) = c.borrow().get(&key) {
+                    return hit.clone();
+                }
+                let m = line_marks(line);
+                let mut v = Vec::new();
+                push_runs(&m, MarkSet::STRIKE, Decoration::Strike, 0, &mut v);
+                push_runs(&m, MarkSet::LINK, Decoration::Underline, 0, &mut v);
+                let mut mm = c.borrow_mut();
+                if mm.len() > 16384 {
+                    mm.clear();
+                }
+                mm.insert(key, v.clone());
+                v
+            });
+            for &(s, e, d) in &rel {
+                out.push((global + s, global + e, d));
+            }
         }
         global += line.chars().count() + 1; // + '\n'
     }

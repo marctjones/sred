@@ -45,6 +45,17 @@ pub struct Editor {
     viewport_h: f32,
     scroll_y: f32,
     tokens: Vec<TokenSpec>,
+    /// Bumped whenever the token set changes, so the per-line styling cache
+    /// (keyed partly on this) invalidates token-colored lines.
+    tokens_gen: u64,
+}
+
+/// Globally-unique generation source for token sets, so caches can't confuse two
+/// editors' token configurations.
+fn next_tokens_gen() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static GEN: AtomicU64 = AtomicU64::new(1);
+    GEN.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Editor {
@@ -57,6 +68,7 @@ impl Editor {
             viewport_h: 600.0,
             scroll_y: 0.0,
             tokens: Vec::new(),
+            tokens_gen: 0,
         }
     }
 
@@ -111,9 +123,11 @@ impl Editor {
     /// chars render in `spec.fg`; use [`token_at`](Self::token_at) on click.
     pub fn register_token(&mut self, spec: TokenSpec) {
         self.tokens.push(spec);
+        self.tokens_gen = next_tokens_gen();
     }
     pub fn clear_tokens(&mut self) {
         self.tokens.clear();
+        self.tokens_gen = next_tokens_gen();
     }
 
     /// The token under a viewport point, if any: `(id, value)` — route this to
@@ -169,6 +183,7 @@ impl Editor {
             self.theme.font_size,
             self.core.cursor_line(),
             &self.tokens,
+            self.tokens_gen,
         )
     }
 
