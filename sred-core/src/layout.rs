@@ -11,7 +11,8 @@
 //! block/line).
 
 use cosmic_text::{
-    Attrs, Buffer, Color, Cursor, Family, FontSystem, Metrics, Shaping, Style, SwashCache, Weight,
+    Attrs, AttrsList, Buffer, Color, Cursor, Family, FontSystem, LineEnding, Metrics, Shaping,
+    Style, SwashCache, Weight,
 };
 
 use crate::editor::{Decoration, Span};
@@ -82,6 +83,16 @@ pub struct ViewOut {
 pub struct TextRenderer {
     font_system: FontSystem,
     swash: SwashCache,
+    /// Persistent buffer for the viewport path: re-used across keystrokes so we
+    /// only rebuild the lines that actually changed (cosmic-text's
+    /// `set_rich_text` otherwise rebuilds every line's text + AttrsList — the
+    /// dominant per-keystroke cost on long notes).
+    cache_buf: Option<Buffer>,
+    /// Per-line content signature matching `cache_buf.lines`. A line is rebuilt
+    /// only when its signature changes.
+    cache_sigs: Vec<u64>,
+    /// Signature of (width, font metrics): any change forces a full rebuild.
+    cache_key: u64,
 }
 
 impl Default for TextRenderer {
@@ -95,6 +106,9 @@ impl TextRenderer {
         TextRenderer {
             font_system: FontSystem::new(),
             swash: SwashCache::new(),
+            cache_buf: None,
+            cache_sigs: Vec::new(),
+            cache_key: 0,
         }
     }
 
@@ -121,6 +135,71 @@ impl TextRenderer {
             None,
         );
         buffer.shape_until_scroll(&mut self.font_system, false);
+        buffer
+    }
+
+    /// Build (or incrementally update) the persistent viewport buffer, rebuilding
+    /// only the lines whose content changed since the last call. Identical layout
+    /// to [`build_buffer`] (same text + attrs + metrics + line ending), so caret /
+    /// hit / delta geometry are unaffected — verified by
+    /// `incremental_matches_full_render`.
+    ///
+    /// Returns the buffer by value (taken out of `self`); the caller must store it
+    /// back into `self.cache_buf` after use.
+    fn build_buffer_cached(&mut self, spans: &[Span], full_width: f32, theme: &Theme) -> Buffer {
+        let shaping_w = (full_width - 2.0 * theme.margin_x).max(16.0);
+        let key = theme_key(theme, shaping_w);
+        let lines = split_lines(spans);
+
+        // Full rebuild if metrics/width changed, the line count changed (Enter /
+        // delete-line / paste), or there's no cached buffer yet. Line splitting
+        // must match cosmic-text's: structural divergence falls back here safely.
+        let reusable =
+            self.cache_buf.is_some() && self.cache_key == key && self.cache_sigs.len() == lines.len();
+        if !reusable {
+            let buffer = self.build_buffer(spans, full_width, theme);
+            self.cache_sigs = lines.iter().map(|l| l.sig).collect();
+            self.cache_key = key;
+            return buffer;
+        }
+
+        let mut buffer = self.cache_buf.take().unwrap();
+        // Defensive: if our line split ever disagrees with cosmic-text's actual
+        // line count (e.g. CRLF or a Unicode paragraph separator we don't split
+        // on), fall back to a full rebuild rather than mis-index lines.
+        if buffer.lines.len() != lines.len() {
+            let nb = self.build_buffer(spans, full_width, theme);
+            self.cache_sigs = lines.iter().map(|l| l.sig).collect();
+            self.cache_key = key;
+            return nb;
+        }
+        let default_attrs = Attrs::new();
+        let mut dirty = false;
+        for (i, lp) in lines.iter().enumerate() {
+            if self.cache_sigs[i] == lp.sig {
+                continue;
+            }
+            let mut text = String::new();
+            let mut attrs_list = AttrsList::new(&default_attrs);
+            for &(t, marks, color, size) in &lp.runs {
+                let start = text.len();
+                text.push_str(t);
+                let end = text.len();
+                if start < end {
+                    let attrs =
+                        attrs_for(marks, color, theme).metrics(Metrics::new(size, size * 1.4));
+                    attrs_list.add_span(start..end, &attrs);
+                }
+            }
+            buffer.lines[i].reset_new(text, LineEnding::default(), attrs_list, Shaping::Advanced);
+            self.cache_sigs[i] = lp.sig;
+            dirty = true;
+        }
+        if dirty {
+            // Re-layout: unchanged lines hit cosmic-text's shape cache (cheap);
+            // only the reset lines actually re-shape.
+            buffer.shape_until_scroll(&mut self.font_system, false);
+        }
         buffer
     }
 
@@ -290,7 +369,7 @@ impl TextRenderer {
         cursor: usize,
         selection: Option<(usize, usize)>,
     ) -> ViewOut {
-        let buffer = self.build_buffer(spans, width as f32, theme);
+        let buffer = self.build_buffer_cached(spans, width as f32, theme);
         let doc_height = Self::doc_height(&buffer, theme);
         let height = viewport_h.max(1);
 
@@ -317,20 +396,28 @@ impl TextRenderer {
             px.copy_from_slice(&theme.bg);
         }
 
-        // A run is visible if any part of it falls inside the viewport band.
-        let visible = |top: f32, lh: f32| -> bool {
-            let y = top + theme.margin_y - sy;
-            y + lh > 0.0 && y < height as f32
-        };
+        // Collect the visible runs ONCE. Every pass below (selection, chips,
+        // glyphs, strike/underline) iterates this small set instead of
+        // re-scanning all of the document's runs per decoration — the key to
+        // keeping a keystroke's cost tied to the viewport, not the doc length.
+        let vis: Vec<_> = buffer
+            .layout_runs()
+            .filter(|r| {
+                let y = r.line_top + theme.margin_y - sy;
+                y + r.line_height > 0.0 && y < height as f32
+            })
+            .collect();
+
+        // Restrict decorations to the visible source span so the decoration loops
+        // are bounded by what's on screen, not by the whole document's markup.
+        let vis_src = visible_source_range(&vis, text, deltas);
+        let dec_overlaps = |s: usize, e: usize| s < vis_src.1 && e > vis_src.0;
 
         if let Some((s, e)) = selection {
             if s != e {
                 let cs = flat_to_render_cursor(text, deltas, s);
                 let ce = flat_to_render_cursor(text, deltas, e);
-                for run in buffer.layout_runs() {
-                    if !visible(run.line_top, run.line_height) {
-                        continue;
-                    }
+                for run in &vis {
                     if let Some((x, w)) = run.highlight(cs, ce) {
                         fill_rect(
                             &mut rgba,
@@ -350,15 +437,12 @@ impl TextRenderer {
         // token chip backgrounds (behind the glyphs)
         for &(s, e, deco) in decorations {
             if let Decoration::Chip(color) = deco {
-                if s >= e {
+                if s >= e || !dec_overlaps(s, e) {
                     continue;
                 }
                 let cs = flat_to_render_cursor(text, deltas, s);
                 let ce = flat_to_render_cursor(text, deltas, e);
-                for run in buffer.layout_runs() {
-                    if !visible(run.line_top, run.line_height) {
-                        continue;
-                    }
+                for run in &vis {
                     if let Some((x, w)) = run.highlight(cs, ce) {
                         fill_rect(
                             &mut rgba,
@@ -375,34 +459,41 @@ impl TextRenderer {
             }
         }
 
+        // Rasterize glyphs from the visible runs only (mirrors `Buffer::draw`'s
+        // placement) so swash doesn't rasterize the whole document each keystroke.
         let fg = Color::rgba(theme.fg[0], theme.fg[1], theme.fg[2], theme.fg[3]);
         let (mx, my) = (theme.margin_x as i32, theme.margin_y as i32);
         let sy_i = sy as i32;
-        buffer.draw(&mut self.font_system, &mut self.swash, fg, |x, y, w, h, color| {
-            for dy in 0..h as i32 {
-                for dx in 0..w as i32 {
-                    let px = x + dx + mx;
-                    let py = y + dy + my - sy_i;
-                    if px < 0 || py < 0 || px >= width as i32 || py >= height as i32 {
-                        continue;
-                    }
-                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                    blend(&mut rgba[idx..idx + 4], color);
-                }
+        for run in &vis {
+            let line_y = run.line_y as i32;
+            for glyph in run.glyphs.iter() {
+                let pg = glyph.physical((0.0, 0.0), 1.0);
+                let glyph_color = glyph.color_opt.unwrap_or(fg);
+                self.swash.with_pixels(
+                    &mut self.font_system,
+                    pg.cache_key,
+                    glyph_color,
+                    |gx, gy, color| {
+                        let px = pg.x + gx + mx;
+                        let py = line_y + pg.y + gy + my - sy_i;
+                        if px < 0 || py < 0 || px >= width as i32 || py >= height as i32 {
+                            return;
+                        }
+                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                        blend(&mut rgba[idx..idx + 4], color);
+                    },
+                );
             }
-        });
+        }
 
         // strikethrough / underline lines (cosmic-text draws neither)
         for &(s, e, deco) in decorations {
-            if s >= e {
+            if s >= e || !dec_overlaps(s, e) {
                 continue;
             }
             let cs = flat_to_render_cursor(text, deltas, s);
             let ce = flat_to_render_cursor(text, deltas, e);
-            for run in buffer.layout_runs() {
-                if !visible(run.line_top, run.line_height) {
-                    continue;
-                }
+            for run in &vis {
                 if let Some((x, w)) = run.highlight(cs, ce) {
                     if w <= 0.0 {
                         continue;
@@ -432,6 +523,8 @@ impl TextRenderer {
             y: doc_caret.y - sy,
             h: doc_caret.h,
         };
+        // Return the persistent buffer for reuse on the next keystroke.
+        self.cache_buf = Some(buffer);
         ViewOut {
             frame: Frame {
                 width,
@@ -607,6 +700,88 @@ fn rgba(c: [u8; 4]) -> Color {
     Color::rgba(c[0], c[1], c[2], c[3])
 }
 
+// ---- incremental buffer support -------------------------------------------
+
+/// One display line, split out of the flat span list: its style runs (borrowed,
+/// no allocation) plus a content signature used to detect changes cheaply.
+struct LineParts<'a> {
+    runs: Vec<(&'a str, MarkSet, Option<[u8; 4]>, f32)>,
+    sig: u64,
+}
+
+/// Split the flat spans into per-display-line run lists, splitting on `\n` (the
+/// same hard break cosmic-text uses for typical LF markdown). Unchanged lines
+/// cost only a hash — no string allocation.
+fn split_lines(spans: &[Span]) -> Vec<LineParts<'_>> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut out: Vec<LineParts> = Vec::new();
+    let mut runs: Vec<(&str, MarkSet, Option<[u8; 4]>, f32)> = Vec::new();
+    let mut hasher = DefaultHasher::new();
+
+    for s in spans {
+        let mut rest = s.text.as_str();
+        loop {
+            match rest.find('\n') {
+                Some(nl) => {
+                    let (head, tail) = (&rest[..nl], &rest[nl + 1..]);
+                    if !head.is_empty() {
+                        head.hash(&mut hasher);
+                        s.marks.bits().hash(&mut hasher);
+                        s.color.hash(&mut hasher);
+                        s.size.to_bits().hash(&mut hasher);
+                        runs.push((head, s.marks, s.color, s.size));
+                    }
+                    out.push(LineParts { runs: std::mem::take(&mut runs), sig: hasher.finish() });
+                    hasher = DefaultHasher::new();
+                    rest = tail;
+                }
+                None => {
+                    if !rest.is_empty() {
+                        rest.hash(&mut hasher);
+                        s.marks.bits().hash(&mut hasher);
+                        s.color.hash(&mut hasher);
+                        s.size.to_bits().hash(&mut hasher);
+                        runs.push((rest, s.marks, s.color, s.size));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    // Flush the trailing segment, matching `str::lines()` / cosmic-text's
+    // BidiParagraphs: a trailing '\n' does NOT create a final empty line, but an
+    // entirely empty document is still one (empty) line.
+    if !runs.is_empty() || out.is_empty() {
+        out.push(LineParts { runs, sig: hasher.finish() });
+    }
+    out
+}
+
+/// Source character range `[start, end)` spanned by the visible runs, used to
+/// skip decorations that aren't on screen. Display line index == source line
+/// index (1:1; long lines wrap into multiple runs sharing a `line_i`).
+fn visible_source_range(vis: &[cosmic_text::LayoutRun], text: &str, deltas: &[i32]) -> (usize, usize) {
+    let _ = deltas;
+    if vis.is_empty() {
+        return (0, usize::MAX);
+    }
+    let min_line = vis.iter().map(|r| r.line_i).min().unwrap();
+    let max_line = vis.iter().map(|r| r.line_i).max().unwrap();
+    (flat_of(text, min_line, 0), flat_of(text, max_line + 1, 0))
+}
+
+/// Signature of the render parameters that, when changed, require a full buffer
+/// rebuild rather than a per-line update.
+fn theme_key(theme: &Theme, shaping_w: f32) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    theme.font_size.to_bits().hash(&mut h);
+    theme.line_height.to_bits().hash(&mut h);
+    shaping_w.to_bits().hash(&mut h);
+    h.finish()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fill_rect(
     rgba: &mut [u8],
@@ -724,6 +899,86 @@ mod tests {
         let down = r.render_viewport(&spans_for(&text), &text, &deltas, &[], 400, 200, 1500.0, false, &theme, 0, None);
         assert!(top.frame.rgba != down.frame.rgba, "scrolling must change the frame");
         assert!(ink(&down.frame.rgba, theme.bg) > 50, "scrolled viewport still paints");
+    }
+
+    // The incremental persistent-buffer path (reused renderer) must produce a
+    // byte-identical frame + caret to a fresh full rebuild. This is the safety
+    // net for the perf optimization: any layout divergence shows up as a pixel
+    // diff here.
+    fn assert_inc_eq_full(seq: &[&str], final_cursor: usize) {
+        let theme = Theme::default();
+        let (w, h) = (400u32, 300u32);
+        let last = *seq.last().unwrap();
+        let dl = vec![0i32; last.matches('\n').count() + 1];
+
+        // Renderer A: replays the whole edit sequence (incremental after step 1).
+        let mut a = TextRenderer::new();
+        for (i, t) in seq.iter().enumerate() {
+            let d = vec![0i32; t.matches('\n').count() + 1];
+            let cur = if i + 1 == seq.len() { final_cursor } else { 0 };
+            a.render_viewport(&spans_for(t), t, &d, &[], w, h, 0.0, false, &theme, cur, None);
+        }
+        let inc = a.render_viewport(&spans_for(last), last, &dl, &[], w, h, 0.0, false, &theme, final_cursor, None);
+
+        // Renderer B: fresh, renders only the final state (full rebuild).
+        let mut b = TextRenderer::new();
+        let full = b.render_viewport(&spans_for(last), last, &dl, &[], w, h, 0.0, false, &theme, final_cursor, None);
+
+        assert_eq!(inc.doc_height, full.doc_height, "doc_height diverged for {seq:?}");
+        assert!((inc.caret.y - full.caret.y).abs() < 0.01 && (inc.caret.x - full.caret.x).abs() < 0.01,
+            "caret diverged for {seq:?}: inc=({},{}) full=({},{})", inc.caret.x, inc.caret.y, full.caret.x, full.caret.y);
+        assert!(inc.frame.rgba == full.frame.rgba, "incremental frame != full-rebuild frame for {seq:?}");
+    }
+
+    #[test]
+    fn incremental_edit_one_line_matches_full() {
+        assert_inc_eq_full(&["alpha\nbravo\ncharlie\ndelta", "alpha\nbravoX\ncharlie\ndelta"], 6);
+    }
+
+    #[test]
+    fn incremental_trailing_newline_matches_full() {
+        // Real markdown ends with '\n'; the trailing newline must NOT create a
+        // phantom line (this case previously panicked on a line-count mismatch).
+        assert_inc_eq_full(&["alpha\nbravo\ncharlie\n", "alpha\nbravoX\ncharlie\n"], 6);
+        assert_inc_eq_full(&["x\n\ny\n", "x\n\nyy\n"], 0);
+    }
+
+    #[test]
+    fn incremental_edit_first_and_last_line_matches_full() {
+        assert_inc_eq_full(
+            &["one\ntwo\nthree", "One\ntwo\nthree", "One\ntwo\nthreeee"],
+            0,
+        );
+    }
+
+    #[test]
+    fn incremental_line_count_change_then_edit_matches_full() {
+        // step 2 changes the line count (structural full rebuild), step 3 edits
+        // a line (incremental on the rebuilt buffer).
+        assert_inc_eq_full(
+            &["a\nb\nc", "a\nb\nc\nd", "a\nb\nc\nD"],
+            0,
+        );
+    }
+
+    #[test]
+    fn incremental_heading_size_change_matches_full() {
+        // A line whose font size changes (heading toggling) must re-layout right.
+        let theme = Theme::default();
+        let (w, h) = (400u32, 300u32);
+        let plain = vec![Span { text: "title\nbody".into(), marks: MarkSet::empty(), color: None, size: 18.0 }];
+        let heading = vec![
+            Span { text: "title".into(), marks: MarkSet::empty(), color: None, size: 30.0 },
+            Span { text: "\nbody".into(), marks: MarkSet::empty(), color: None, size: 18.0 },
+        ];
+        let d = vec![0i32; 2];
+        let mut a = TextRenderer::new();
+        a.render_viewport(&plain, "title\nbody", &d, &[], w, h, 0.0, false, &theme, 0, None);
+        let inc = a.render_viewport(&heading, "title\nbody", &d, &[], w, h, 0.0, false, &theme, 0, None);
+        let mut b = TextRenderer::new();
+        let full = b.render_viewport(&heading, "title\nbody", &d, &[], w, h, 0.0, false, &theme, 0, None);
+        assert_eq!(inc.doc_height, full.doc_height, "heading height diverged");
+        assert!(inc.frame.rgba == full.frame.rgba, "heading incremental frame != full");
     }
 
     #[test]

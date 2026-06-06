@@ -48,6 +48,26 @@ fn keystroke_cost_vs_doc_length() {
 
 #[test]
 #[ignore]
+fn stage_breakdown_4000() {
+    // Run with: SRED_PERF=1 cargo test -p sred-core --release --test perf_probe \
+    //   stage_breakdown_4000 -- --ignored --nocapture
+    for &n in &[10usize, 100, 1000, 4000] {
+        let body = paragraph(n);
+        let mut e = Editor::from_source(&body, Format::Markdown);
+        e.set_viewport(800, 600.0);
+        e.render_view(true); // warm
+        println!("\n=== one keystroke, {n}-line doc (stages) ===");
+        for _ in 0..2 {
+            e.apply(Command::Insert("x".into()));
+            let t = Instant::now();
+            let _ = e.render_view(true);
+            println!("TOTAL render_view {:>8.1}µs", t.elapsed().as_micros() as f64);
+        }
+    }
+}
+
+#[test]
+#[ignore]
 fn fulldoc_vs_viewport_render() {
     println!("\n--- render() full-doc vs render_view() viewport, by doc length ---");
     for &n in &[100usize, 1000, 4000] {
