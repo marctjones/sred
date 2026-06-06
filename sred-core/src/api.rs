@@ -197,6 +197,15 @@ impl Editor {
         self.core.apply(cmd);
     }
 
+    /// Whether an undo / redo step is available — for enabling/disabling host
+    /// toolbar buttons or menu items.
+    pub fn can_undo(&self) -> bool {
+        self.core.can_undo()
+    }
+    pub fn can_redo(&self) -> bool {
+        self.core.can_redo()
+    }
+
     // ---- pointer input ----------------------------------------------------
     //
     // Coordinates are in **document space** — the full-frame coordinate system,

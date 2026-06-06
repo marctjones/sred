@@ -32,7 +32,11 @@ ed.set_viewport(width_px, height_px); // call again on resize
 // key char:     ed.apply(Command::Insert("x".into()));
 // backspace:    ed.apply(Command::DeleteBackward);
 // arrows:       ed.apply(Command::Move(Motion::Left));  // up/down: ed.move_vertical(false/true)
-// toolbar bold: ed.core_mut().apply(Command::ToggleMark(MarkSet::BOLD));
+// toolbar bold: ed.apply(Command::ToggleMark(MarkSet::BOLD));   // TOGGLES: wraps the
+//   selection, or unwraps it if already bold. Route format buttons (bold/italic/
+//   code/strike, headings, lists) through ToggleMark/ToggleBlock — NOT by inserting
+//   literal "**…**" snippets, which can't un-toggle or wrap a selection.
+// undo/redo UI: ed.can_undo() / ed.can_redo() → enable/disable the buttons.
 // click:        ed.click(x, y);   drag: ed.drag(x, y);   dbl: ed.double_click(x, y)
 //   ^ x,y are in DOCUMENT space (the full-frame coords a TouchArea inside a
 //     Flickable reports — its mouse-y already includes the scroll). Don't add scroll.
