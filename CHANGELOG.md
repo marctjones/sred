@@ -3,6 +3,31 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.2.0-alpha.5] — 2026-06-06
+
+### Performance — flat per-keystroke cost (snappy at any document size)
+A keystroke (including Enter / paste) is now under one 60 fps frame regardless of
+note length — measured warm: 100 lines ~2 ms, 1000 ~7 ms, 4000 ~13 ms (was
+~1900 ms at 4000 before this line of work).
+
+- **Incremental persistent buffer** — reuse one cosmic-text `Buffer` across
+  renders; rebuild only changed lines instead of `set_rich_text` over the whole
+  document each keystroke (that rebuild was the dominant cost; shaping itself was
+  already cached by cosmic-text).
+- **Line-splice updates** — a prefix/suffix signature diff splices `BufferLine`s,
+  so line insert/delete (Enter, Backspace-join, paste) is O(changed lines), not
+  O(doc). Removes the multi-hundred-ms stall on long notes.
+- **Viewport-bounded raster** — rasterize glyphs from visible runs only, and run
+  selection/chip/strike-underline passes over the visible runs + the on-screen
+  source range (was re-scanning every run per decoration).
+- **Per-line styling cache** — `styled_runs` + `decorations` memoize the markdown
+  scan per line; only changed lines re-scan. `Span` now derives `Clone`.
+- All byte-identical to the non-cached / full-rebuild paths — guarded by
+  `incremental_*` (layout) and `styling_cache_matches_fresh_computation` (view)
+  tests. New `sred-core/tests/perf_probe.rs` (ignored) measures keystroke cost.
+- `Editor::register_token` / `clear_tokens` bump a token generation that
+  invalidates the styling cache for token-colored lines.
+
 ## [0.2.0-alpha.4] — 2026-06-06
 
 ### Performance
@@ -94,3 +119,4 @@ model with reconstructive save (superseded by the 0.2 source-anchored core).
 [0.2.0-alpha.2]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.2
 [0.2.0-alpha.3]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.3
 [0.2.0-alpha.4]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.4
+[0.2.0-alpha.5]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.5

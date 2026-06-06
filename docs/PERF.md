@@ -76,6 +76,39 @@ per-keystroke allocation and GPU upload are **flat regardless of note length**.
 - **Coalesce renders:** if keystrokes arrive faster than a render completes,
   render once for the batch.
 
+## 2b. What the measurements actually showed (and what we did)
+
+Instrumenting the per-keystroke pipeline (`sred-core/tests/perf_probe.rs`,
+release) overturned the initial guess that *shaping* was the bottleneck:
+
+| Stage (4000-line note, before) | cost | reality |
+|---|---|---|
+| `shape_until_scroll` | <1 ms | cosmic-text already caches shaping globally |
+| `set_rich_text` | ~1500 ms | **rebuilding every line's text+AttrsList each keystroke** |
+| `buffer.draw` raster | ~700 ms | rasterized *every* glyph, then discarded off-screen ones |
+| decoration loops | ~500 ms | O(decorations × all runs) |
+| `styled_runs` + `decorations` | ~40 ms | whole-document markdown re-scan |
+
+Fixes, all byte-identical to the naive path and test-gated:
+
+1. **Incremental persistent buffer** (`TextRenderer.cache_buf`) — reuse one
+   `Buffer`; a per-line signature diff rebuilds only changed lines via
+   `BufferLine::reset_new`.
+2. **Prefix/suffix line splice** — line insert/delete updates `buffer.lines`
+   with `Vec::splice` instead of a full rebuild, so Enter/paste are O(changed).
+3. **Visible-run raster** — draw glyphs from visible runs only; selection/chip/
+   strike passes iterate the visible runs + on-screen source range.
+4. **Per-line styling cache** — `styled_runs`/`decorations` memoize the markdown
+   scan per line (key: text, on-caret, base size, token generation).
+
+Result (warm keystroke, including Enter/paste): **100 lines ≈ 2 ms, 1000 ≈ 7 ms,
+4000 ≈ 13 ms** — under one 60 fps frame (16.7 ms) at every realistic size.
+
+The residual is cheap O(doc) assembly (~3 µs/line: whole-doc span clone +
+signature hash + `layout_runs` iteration). Driving it to true O(1) would require
+a *changed-lines* facade contract (pass only edited lines, never materialize
+whole-document spans) — worthwhile only beyond ~10k-line single notes.
+
 ## 3. Principle
 
 Perceived snappiness comes from **doing only the work the user can see, now, and
