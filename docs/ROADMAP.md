@@ -155,19 +155,25 @@ live-preview needs (map spans → inline styling + marker hiding). This matches 
 project rule of leveraging existing libraries rather than duplicating them.
 
 ### MF1 — Full CommonMark via `pulldown-cmark`
-- Replace `line_marks_md` / `project_line_md` with styling derived from
-  `pulldown-cmark`'s `OffsetIter` (event + byte-range stream; MIT; the parser
-  rustdoc uses). Covers the full CommonMark inline + block grammar (nested
-  emphasis/links, reference links, setext headings, nested lists/quotes, etc.),
-  plus GFM tables/strikethrough/tasklists behind its options.
-- Keep the per-line projection/delta/marker-hiding machinery; only the recognizer
-  changes. Gate with the existing fidelity suite + the CommonMark spec examples.
+- **Inline: DONE** (0.3.0-alpha). `line_marks_md` now parses each line with
+  `pulldown-cmark` (+ GFM strikethrough) and maps Strong/Emphasis/Code/
+  Strikethrough/Link spans — spec-correct nesting, delimiter matching, code-span
+  protection, links. Per-line projection/delta/marker-hiding machinery unchanged.
+- **Block: Phase 2 (todo).** Cross-line CommonMark constructs (reference-link
+  definitions, setext headings, nested lists/quotes, indented code, HTML blocks)
+  need document-level parsing rather than the per-line projection. Drive
+  `project_line_md` from a doc-level `OffsetIter` pass, keeping the incremental
+  caches (cache the parse per block, or accept pulldown's fast whole-doc parse).
 
 ### MF2 — Full Typst via `typst-syntax`
-- Drive Typst styling from `typst-syntax` (the official Typst parser; Apache-2.0,
-  GPL-compatible) — a real syntax tree with spans covering every construct
-  (code mode `#…`, math, `#let`/`#show`/`#figure`, labels/refs, comments).
-- Supersedes the Level-1 hand-rolled Typst recognizer; projection machinery stays.
+- **Inline: DONE** (0.3.0-alpha). `line_marks_typst` walks `typst-syntax`'s
+  `LinkedNode` tree using the crate's own `highlight()`/`Tag` categorizer —
+  strong/emph/raw, math, refs/labels, and `#`-code-mode tokens. Supersedes the
+  Level-1 hand-rolled recognizer.
+- **Block + color: Phase 2 (todo).** Drive `project_line_typst` (heading depth,
+  list/term markers, hiding) from the syntax tree; optionally map `Tag` → per-token
+  *colors* (keyword/function/number/string) instead of only the CODE mark, which
+  needs a color channel alongside `MarkSet` in the styling pass.
 
 ### MF3 — Rendered fragments (math / figures)
 - The hard part text-styling can't do: typeset `$…$` math and `#figure` output.
@@ -175,6 +181,27 @@ project rule of leveraging existing libraries rather than duplicating them.
   images (or keep a compiled side-preview). True inline interleaving of rendered
   fragments with cosmic-text layout is a large, separate effort.
 
-**Decision needed before MF1/MF2:** both add dependencies (`pulldown-cmark`,
-`typst-syntax`) and rework the recognizer layer. The block/inline projection,
-caret/delta mapping, and incremental caches are unaffected.
+---
+
+## Future file formats
+
+**World 1 — plaintext markup (natural fit).** Anything that's "UTF-8 + inline
+markup" drops into the source-anchored model as a new parser-driven recognizer
+(the MF1/MF2 pattern), byte-lossless and fast: **reStructuredText**, **AsciiDoc**,
+**Org-mode**, **MediaWiki/Wikitext**, **Textile**, **LaTeX**. Prioritize by demand.
+
+**World 2 — binary rich documents (DOCX, ODT/ODP) — a separate track.** These are
+ZIP+XML containers, *not* plaintext, so they break the source-anchored model: they
+need a structured document model with import/export and **cannot be byte-lossless**
+(round-tripping arbitrary DOCX losslessly is the hard part of Word/LibreOffice
+interop). Recommended path if pursued:
+1. **Import/export conversion first** (DOCX ↔ Markdown, pandoc-style) — lowest cost,
+   reuses the existing editor; lossy but useful.
+2. **Native structured editing** only if there's real demand — a second
+   architecture alongside the source-anchored core.
+3. **Comments before redlining.** Anchored comments (`word/comments.xml` ranges)
+   map onto the existing decoration/annotation system. Full tracked-changes
+   (`<w:ins>`/`<w:del>` accept/reject with author/date) is a much larger model
+   commitment — defer unless collaboration is a headline requirement.
+Rust building blocks: `zip` + `quick-xml`; `docx-rs` (partial DOCX r/w); ODF
+support in Rust is currently sparse.

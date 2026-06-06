@@ -3,6 +3,29 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.3.0-alpha.1] — 2026-06-06
+
+### Changed — parser-driven inline styling (full CommonMark + full Typst, inline)
+- **MF1 — Markdown inline via `pulldown-cmark`.** `line_marks_md` now uses the
+  CommonMark reference parser (+ GFM strikethrough) instead of a hand-rolled
+  scanner: spec-correct nesting, delimiter matching, code-span protection, and
+  links. Replaces `apply_pair`/`apply_single`/`apply_links_marks`.
+- **MF2 — Typst inline via `typst-syntax`.** `line_marks_typst` walks
+  `typst-syntax`'s `LinkedNode` tree using the crate's own `highlight()`/`Tag`
+  categorizer: strong/emph/raw, math, refs/labels, and `#`-code-mode tokens.
+  Replaces the Level-1 hand-rolled recognizer.
+- Both reuse already-present workspace deps; only the inline recognizer changed.
+  Block-marker projection + byte-delta/cursor mapping are unchanged (inline marks
+  are cosmetic). Per-line styling cache keeps keystroke cost flat (4000-line note
+  ≈ 16 ms warm).
+- Tests: `markdown_inline_via_commonmark`, `typst_full_via_typst_syntax`.
+
+### Roadmap
+- `docs/ROADMAP.md`: MF1/MF2 **block-level** constructs (reference links, setext,
+  nested lists, Typst block markers + per-token colors) scoped as Phase 2; added a
+  **Future file formats** section (plaintext markup vs DOCX/ODP, comments before
+  redlining).
+
 ## [0.2.0] — 2026-06-06
 
 **Milestone: sred is usable as [Noet](../notes)'s primary editor.** Rolls up the
@@ -166,3 +189,4 @@ model with reconstructive save (superseded by the 0.2 source-anchored core).
 [0.2.0-alpha.5]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.5
 [0.2.0-alpha.6]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.6
 [0.2.0]: https://github.com/marctjones/sred/releases/tag/v0.2.0
+[0.3.0-alpha.1]: https://github.com/marctjones/sred/releases/tag/v0.3.0-alpha.1
