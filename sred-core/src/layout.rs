@@ -61,6 +61,22 @@ pub struct Caret {
 pub struct RenderOut {
     pub frame: Frame,
     pub caret: Caret,
+    /// Full document height in px. Equals `frame.height` here; see [`ViewOut`]
+    /// for the viewport-rendering variant.
+    pub doc_height: u32,
+}
+
+/// Output of [`TextRenderer::render_viewport`]: a viewport-sized frame plus the
+/// scroll the renderer actually resolved to (after clamping + caret-follow).
+pub struct ViewOut {
+    /// Viewport-sized RGBA image (host shows it at a fixed position).
+    pub frame: Frame,
+    /// Caret rectangle in **viewport-relative** coordinates.
+    pub caret: Caret,
+    /// The scroll offset actually used (input clamped, then caret-follow).
+    pub scroll_y: f32,
+    /// Full scrollable document height in px (for the host's scrollbar).
+    pub doc_height: u32,
 }
 
 pub struct TextRenderer {
@@ -242,6 +258,189 @@ impl TextRenderer {
                 rgba,
             },
             caret,
+            doc_height: height,
+        }
+    }
+
+    /// Render only the visible slice `[scroll_y, scroll_y + viewport_h)` of the
+    /// document into a **viewport-sized** frame, so per-keystroke allocation and
+    /// GPU upload are flat regardless of document length.
+    ///
+    /// The buffer is still shaped in full (geometry/caret/hit stay identical to
+    /// [`render`]); only rasterization is bounded. Caret `y` is returned in
+    /// viewport-relative coordinates. `doc_height` carries the full scrollable
+    /// height for the host's scrollbar.
+    ///
+    /// When `follow` is set the scroll is nudged so the caret stays on screen,
+    /// using the same buffer (one shaping pass) so the rasterized slice always
+    /// matches the resolved scroll — typing at the bottom can never paint a
+    /// stale slice.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_viewport(
+        &mut self,
+        spans: &[Span],
+        text: &str,
+        deltas: &[i32],
+        decorations: &[(usize, usize, Decoration)],
+        width: u32,
+        viewport_h: u32,
+        scroll_y: f32,
+        follow: bool,
+        theme: &Theme,
+        cursor: usize,
+        selection: Option<(usize, usize)>,
+    ) -> ViewOut {
+        let buffer = self.build_buffer(spans, width as f32, theme);
+        let doc_height = Self::doc_height(&buffer, theme);
+        let height = viewport_h.max(1);
+
+        // Doc-space caret first, so caret-follow can pick the slice before we
+        // rasterize it.
+        let mut doc_caret = self.caret_geom(&buffer, text, deltas, cursor, theme);
+        doc_caret.x += theme.margin_x;
+        doc_caret.y += theme.margin_y;
+
+        let max_scroll = doc_height.saturating_sub(height) as f32;
+        let mut sy = scroll_y.clamp(0.0, max_scroll);
+        if follow {
+            let pad = doc_caret.h.min(height as f32 * 0.3);
+            if doc_caret.y - pad < sy {
+                sy = doc_caret.y - pad;
+            } else if doc_caret.y + doc_caret.h + pad > sy + height as f32 {
+                sy = doc_caret.y + doc_caret.h + pad - height as f32;
+            }
+            sy = sy.clamp(0.0, max_scroll);
+        }
+
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px.copy_from_slice(&theme.bg);
+        }
+
+        // A run is visible if any part of it falls inside the viewport band.
+        let visible = |top: f32, lh: f32| -> bool {
+            let y = top + theme.margin_y - sy;
+            y + lh > 0.0 && y < height as f32
+        };
+
+        if let Some((s, e)) = selection {
+            if s != e {
+                let cs = flat_to_render_cursor(text, deltas, s);
+                let ce = flat_to_render_cursor(text, deltas, e);
+                for run in buffer.layout_runs() {
+                    if !visible(run.line_top, run.line_height) {
+                        continue;
+                    }
+                    if let Some((x, w)) = run.highlight(cs, ce) {
+                        fill_rect(
+                            &mut rgba,
+                            width,
+                            height,
+                            x + theme.margin_x,
+                            run.line_top + theme.margin_y - sy,
+                            w.max(2.0),
+                            run.line_height,
+                            theme.selection,
+                        );
+                    }
+                }
+            }
+        }
+
+        // token chip backgrounds (behind the glyphs)
+        for &(s, e, deco) in decorations {
+            if let Decoration::Chip(color) = deco {
+                if s >= e {
+                    continue;
+                }
+                let cs = flat_to_render_cursor(text, deltas, s);
+                let ce = flat_to_render_cursor(text, deltas, e);
+                for run in buffer.layout_runs() {
+                    if !visible(run.line_top, run.line_height) {
+                        continue;
+                    }
+                    if let Some((x, w)) = run.highlight(cs, ce) {
+                        fill_rect(
+                            &mut rgba,
+                            width,
+                            height,
+                            x + theme.margin_x - 1.0,
+                            run.line_top + theme.margin_y - sy,
+                            w.max(2.0) + 2.0,
+                            run.line_height,
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+
+        let fg = Color::rgba(theme.fg[0], theme.fg[1], theme.fg[2], theme.fg[3]);
+        let (mx, my) = (theme.margin_x as i32, theme.margin_y as i32);
+        let sy_i = sy as i32;
+        buffer.draw(&mut self.font_system, &mut self.swash, fg, |x, y, w, h, color| {
+            for dy in 0..h as i32 {
+                for dx in 0..w as i32 {
+                    let px = x + dx + mx;
+                    let py = y + dy + my - sy_i;
+                    if px < 0 || py < 0 || px >= width as i32 || py >= height as i32 {
+                        continue;
+                    }
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    blend(&mut rgba[idx..idx + 4], color);
+                }
+            }
+        });
+
+        // strikethrough / underline lines (cosmic-text draws neither)
+        for &(s, e, deco) in decorations {
+            if s >= e {
+                continue;
+            }
+            let cs = flat_to_render_cursor(text, deltas, s);
+            let ce = flat_to_render_cursor(text, deltas, e);
+            for run in buffer.layout_runs() {
+                if !visible(run.line_top, run.line_height) {
+                    continue;
+                }
+                if let Some((x, w)) = run.highlight(cs, ce) {
+                    if w <= 0.0 {
+                        continue;
+                    }
+                    let (frac, color) = match deco {
+                        Decoration::Strike => (0.55, theme.fg),
+                        Decoration::Underline => (0.86, theme.link),
+                        Decoration::Chip(_) => continue,
+                    };
+                    let thick = (run.line_height * 0.06).max(1.5);
+                    fill_rect(
+                        &mut rgba,
+                        width,
+                        height,
+                        x + theme.margin_x,
+                        run.line_top + theme.margin_y - sy + run.line_height * frac,
+                        w,
+                        thick,
+                        color,
+                    );
+                }
+            }
+        }
+
+        let caret = Caret {
+            x: doc_caret.x,
+            y: doc_caret.y - sy,
+            h: doc_caret.h,
+        };
+        ViewOut {
+            frame: Frame {
+                width,
+                height,
+                rgba,
+            },
+            caret,
+            scroll_y: sy,
+            doc_height,
         }
     }
 
@@ -447,6 +646,105 @@ fn blend(dst: &mut [u8], src: Color) {
 #[cfg(test)]
 mod tests {
     use super::{flat_of, flat_to_render_cursor, linecol, render_cursor_to_flat};
+    use super::{Span, TextRenderer, Theme};
+    use crate::model::MarkSet;
+
+    fn spans_for(text: &str) -> Vec<Span> {
+        vec![Span {
+            text: text.to_string(),
+            marks: MarkSet::empty(),
+            color: None,
+            size: 18.0,
+        }]
+    }
+
+    // Count pixels that differ from the background — a proxy for "is anything
+    // actually drawn?". Catches the blank-render regression directly.
+    fn ink(rgba: &[u8], bg: [u8; 4]) -> usize {
+        rgba.chunks_exact(4).filter(|p| p[..] != bg[..]).count()
+    }
+
+    #[test]
+    fn viewport_render_shows_content_at_top() {
+        let mut r = TextRenderer::new();
+        let theme = Theme::default();
+        let text = "Hello world\nsecond line\nthird line";
+        let spans = spans_for(text);
+        let deltas = vec![0; 3];
+        let out =
+            r.render_viewport(&spans, text, &deltas, &[], 400, 200, 0.0, false, &theme, 0, None);
+        assert_eq!(out.frame.height, 200, "frame must be viewport-sized");
+        assert!(
+            ink(&out.frame.rgba, theme.bg) > 50,
+            "top-of-document viewport must actually paint glyphs (blank-render guard)"
+        );
+    }
+
+    #[test]
+    fn viewport_render_reflects_edits_in_view() {
+        let mut r = TextRenderer::new();
+        let theme = Theme::default();
+        let before = "abc";
+        let after = "abcXYZ";
+        let r1 = r.render_viewport(&spans_for(before), before, &[0], &[], 400, 120, 0.0, false, &theme, 0, None);
+        let r2 = r.render_viewport(&spans_for(after), after, &[0], &[], 400, 120, 0.0, false, &theme, 0, None);
+        assert!(
+            r1.frame.rgba != r2.frame.rgba,
+            "typing a character must change the visible frame"
+        );
+        assert!(ink(&r2.frame.rgba, theme.bg) > ink(&r1.frame.rgba, theme.bg));
+    }
+
+    #[test]
+    fn viewport_render_cost_is_flat_in_doc_length() {
+        // The whole point of Tier 2: the rendered frame (and thus alloc/upload)
+        // does not grow with document length.
+        let mut r = TextRenderer::new();
+        let theme = Theme::default();
+        let short: String = "line\n".repeat(10);
+        let long: String = "line\n".repeat(4000);
+        let s = r.render_viewport(&spans_for(&short), &short, &[0; 11], &[], 400, 200, 0.0, false, &theme, 0, None);
+        let l = r.render_viewport(&spans_for(&long), &long, &[0; 4001], &[], 400, 200, 0.0, false, &theme, 0, None);
+        assert_eq!(s.frame.rgba.len(), l.frame.rgba.len(), "frame size must be flat");
+        assert!(l.doc_height > s.doc_height, "doc_height still reflects full length");
+        assert!(l.doc_height > 4000 * 10, "long doc reports a tall scroll range");
+    }
+
+    #[test]
+    fn viewport_render_scrolls_to_show_lower_content() {
+        // Distinct content top vs bottom; scrolling must change what's painted.
+        let mut r = TextRenderer::new();
+        let theme = Theme::default();
+        let mut text = String::new();
+        for i in 0..200 {
+            text.push_str(&format!("row{i}\n"));
+        }
+        let deltas = vec![0; 201];
+        let top = r.render_viewport(&spans_for(&text), &text, &deltas, &[], 400, 200, 0.0, false, &theme, 0, None);
+        let down = r.render_viewport(&spans_for(&text), &text, &deltas, &[], 400, 200, 1500.0, false, &theme, 0, None);
+        assert!(top.frame.rgba != down.frame.rgba, "scrolling must change the frame");
+        assert!(ink(&down.frame.rgba, theme.bg) > 50, "scrolled viewport still paints");
+    }
+
+    #[test]
+    fn viewport_caret_is_viewport_relative() {
+        let mut r = TextRenderer::new();
+        let theme = Theme::default();
+        let mut text = String::new();
+        for i in 0..100 {
+            text.push_str(&format!("row{i}\n"));
+        }
+        let deltas = vec![0; 101];
+        // Caret at the document end; scroll past the bottom (clamps to max) so
+        // the final line — and the caret — sit inside the viewport.
+        let n = text.chars().count();
+        let out = r.render_viewport(&spans_for(&text), &text, &deltas, &[], 400, 200, 50_000.0, false, &theme, n, None);
+        assert!(
+            out.caret.y >= -theme.line_height && out.caret.y <= 200.0 + theme.line_height,
+            "caret y should be within (near) the viewport, got {}",
+            out.caret.y
+        );
+    }
 
     #[test]
     fn linecol_roundtrip_multiline() {

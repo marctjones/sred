@@ -23,7 +23,7 @@ pub use api::{Editor, FrameOut};
 pub use view::{TokenMatch, TokenSpec};
 pub use editor::{BlockKind, Command, Decoration, EditorCore, Motion, Span};
 pub use format::{backend_for, Caps, DocumentFormat, FormatError};
-pub use layout::{Frame, TextRenderer, Theme};
+pub use layout::{Frame, RenderOut, TextRenderer, Theme, ViewOut};
 pub use model::{Block, Document, Format, Inline, List, MarkSet};
 
 #[cfg(test)]
