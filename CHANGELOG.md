@@ -3,6 +3,35 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.0-alpha.2] — 2026-06-06
+
+### Fixed / Added — long-standing Slint-host + list gaps (#1, #2, #3)
+
+- **#1 — Slint relayout no longer recurses.** The reusable `RichTextEditor`
+  reported its viewport size from the Flickable's `changed`/`init` geometry
+  handlers, which fire *during* the layout flush and re-entered Slint's property
+  system → `Recursion detected` (SIGABRT) in any host that relays it out. Now the
+  size is reported from a post-layout `Timer`, the component's `preferred-width/
+  height` are pinned to `0px`, and `scope`/`flick` fill explicitly. Regression
+  test `relayout_does_not_recurse` advances time to force relayout. Behaviour
+  matches the workaround documented in `docs/INTEGRATION.md`.
+- **#2 — accessibility shadow in the Slint host.** The bitmap surface is opaque
+  to assistive tech; the component now mirrors the document into `doc-text` and
+  exposes it as `accessible-role: text` + `accessible-value`, so screen readers
+  can read the content. (Core already provides `Editor::a11y()` since 0.5.0, and
+  the egui adapter feeds AccessKit.) IME through the Slint image surface remains
+  limited by Slint; core + the egui adapter support composition.
+- **#3 — list editing: Tab/Shift-Tab indent & outdent.** `Command::Indent` /
+  `Outdent` shift the selected lines (or caret line) by one level — nesting list
+  items, indenting plain lines — wired to Tab/Shift-Tab in both the Slint and egui
+  adapters. (Nested bullet/ordered *rendering* with indentation already shipped in
+  0.3.0; `tests/lists.rs` pins it down. Ordered markers stay visible by design.)
+
+### Tests
+- `sred-slint`: `relayout_does_not_recurse`, `editor_exposes_text_to_accessibility`.
+- `tests/lists.rs` (6): nested bullet/ordered rendering, indent/outdent (+ undo,
+  multi-line, column-0 floor, byte-lossless).
+
 ## [0.7.0-alpha.1] — 2026-06-06
 
 ### Added — rendered math/figure fragment architecture (#15, partial)

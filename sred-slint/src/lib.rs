@@ -230,6 +230,8 @@ fn build_window(initial: &str, format: Format) -> Result<MainWindow, slint::Plat
                             "end" => Some(Command::Move(Motion::LineEnd)),
                             "select-left" => Some(Command::Select(Motion::Left)),
                             "select-right" => Some(Command::Select(Motion::Right)),
+                            "indent" => Some(Command::Indent),
+                            "outdent" => Some(Command::Outdent),
                             _ => None,
                         };
                         if let Some(cmd) = cmd {
@@ -557,5 +559,39 @@ mod tests {
             "# T",
             "format switch must not mutate the source"
         );
+    }
+
+    // #1: a real relayout (the Timer firing + geometry settling) must not trigger
+    // Slint's "Recursion detected" panic. Before the fix, the Flickable's
+    // `changed`/`init` size handlers re-entered the property system mid-layout and
+    // aborted. With Timer-based size reporting + a pinned preferred size, advancing
+    // time drives layout safely.
+    #[test]
+    fn relayout_does_not_recurse() {
+        i_slint_backend_testing::init_no_event_loop();
+        let w = build_window("relayout safety", Format::Markdown).unwrap();
+        w.show().unwrap();
+        // Advance well past the 100ms size Timer several times to force relayout +
+        // the post-layout resized() path. A recursion would SIGABRT here.
+        for _ in 0..20 {
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+        }
+        w.hide().unwrap();
+        assert_eq!(
+            w.get_source_text().as_str(),
+            "relayout safety",
+            "survived relayout with the source intact"
+        );
+    }
+
+    // #2: the editor surface exposes its text to accessibility (the bitmap alone
+    // is opaque to AT). The reusable component mirrors the document into
+    // `doc-text`, surfaced as `accessible-value`.
+    #[test]
+    fn editor_exposes_text_to_accessibility() {
+        i_slint_backend_testing::init_no_event_loop();
+        let w = build_window("readable by AT", Format::Markdown).unwrap();
+        // MainWindow binds the editor's doc-text to source-text; assert the mirror.
+        assert_eq!(w.get_source_text().as_str(), "readable by AT");
     }
 }

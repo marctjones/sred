@@ -120,6 +120,29 @@ the only thing waiting on M5.
 | caret/selection/scroll geometry, RGBA rendering | the Slint window, toolbar/menus, theme values |
 | `text()` (what to persist) | Typst compile→image preview; todo `format_todo_line()` |
 
+## 6b. Embedding the Slint component safely (relayout)
+
+The reference `RichTextEditor` (`sred-slint/ui/sred.slint`) is now relayout-safe by
+construction, but if you adapt it, keep these two rules (they avoid Slint's
+`Recursion detected` panic — see #1):
+
+- **Do not report the viewport size from `changed width/height` or `init`
+  geometry handlers.** Those fire *during* the layout flush; invoking a callback
+  (e.g. `resized(...)`) from them re-enters the property system and recurses.
+  Report size from a post-layout `Timer` instead (the component does this and
+  only calls `resized` when the size actually changes).
+- **Pin the component's preferred size** (`preferred-width/height: 0px`) and let
+  sizes flow top-down (`scope`/`flick` use `width/height: 100%`). Otherwise a
+  host that negotiates preferred size with sibling stretch children can cycle
+  `root.preferred ← child ← root.size`.
+
+Embed it as a **layout child** (e.g. inside a `VerticalLayout`/`HorizontalLayout`),
+not as a 100%-fill child of a non-layout parent.
+
+**Accessibility:** the component mirrors the document into `doc-text` and exposes
+`accessible-role: text` + `accessible-value`, so screen readers can read the
+content even though the glyphs are a bitmap (#2). Drive it from your source text.
+
 ## 7. Status
 
 - ✅ `Editor` facade (`sred-core/src/api.rs`) — drive + render + byte-lossless text.

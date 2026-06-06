@@ -90,9 +90,17 @@ pub enum Command {
     Link(String),
     SetBlock(BlockKind),
     ToggleBlock(BlockKind),
+    /// Indent the selected lines (or caret line) by one level (Tab). Nests list
+    /// items; indents plain lines.
+    Indent,
+    /// Outdent the selected lines by one level (Shift+Tab).
+    Outdent,
     Undo,
     Redo,
 }
+
+/// One indent level (CommonMark/Typst sub-list indentation).
+const INDENT: &str = "  ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditKind {
@@ -685,9 +693,53 @@ impl EditorCore {
                 self.checkpoint(EditKind::Structure);
                 self.set_block(k, true);
             }
+            Command::Indent => {
+                self.checkpoint(EditKind::Structure);
+                self.indent_lines(true);
+            }
+            Command::Outdent => {
+                self.checkpoint(EditKind::Structure);
+                self.indent_lines(false);
+            }
             Command::Undo => self.undo(),
             Command::Redo => self.redo(),
         }
+    }
+
+    /// Indent (`add`) or outdent every line touched by the selection / caret by
+    /// one [`INDENT`] level. Nests list items; plain lines just shift right/left.
+    fn indent_lines(&mut self, add: bool) {
+        let (s, e) = self.selection_range().unwrap_or((self.cursor, self.cursor));
+        let first = self.rope.char_to_line(s);
+        let last = self.rope.char_to_line(e);
+        for line in (first..=last).rev() {
+            let ls = self.rope.line_to_char(line);
+            if add {
+                self.rope.insert(ls, INDENT);
+                let delta = INDENT.chars().count() as isize;
+                self.cursor = shift_offset(self.cursor, ls, self.len(), delta);
+                if let Some(a) = self.anchor {
+                    self.anchor = Some(shift_offset(a, ls, self.len(), delta));
+                }
+            } else {
+                // Remove up to one indent level of leading spaces (or a leading tab).
+                let raw = self.rope.line(line).to_string();
+                let strip = if raw.starts_with('\t') {
+                    1
+                } else {
+                    raw.chars().take(INDENT.len()).take_while(|c| *c == ' ').count()
+                };
+                if strip > 0 {
+                    self.rope.remove(ls..ls + strip);
+                    let delta = -(strip as isize);
+                    self.cursor = shift_offset(self.cursor, ls, self.len(), delta);
+                    if let Some(a) = self.anchor {
+                        self.anchor = Some(shift_offset(a, ls, self.len(), delta));
+                    }
+                }
+            }
+        }
+        self.cursor = self.cursor.min(self.len());
     }
 
     // ---- primitive edits (splice the rope) --------------------------------

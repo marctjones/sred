@@ -11,6 +11,26 @@ export component RichTextEditor inherits Rectangle {
     in property <length> caret-y;
     in property <length> caret-h: 22px;
     in property <bool> caret-on: true;
+    // The document text, mirrored for accessibility (the pixels come from `frame`,
+    // so without this the editing surface is invisible to screen readers — #2).
+    in property <string> doc-text;
+
+    // #1: pin the preferred size so the component never derives it from children
+    // that reference its own size (which can cycle root.preferred ← child ← size
+    // during a host's preferred-size negotiation). Sizes flow top-down.
+    preferred-width: 0px;
+    preferred-height: 0px;
+
+    // #2: accessibility shadow — expose the editor as a readable text field so
+    // assistive tech has the document content + a role to navigate.
+    accessible-role: text;
+    accessible-label: "Rich text editor";
+    accessible-value: root.doc-text;
+
+    // #1: viewport size last reported to the host (Timer-debounced, never from a
+    // mid-layout geometry handler).
+    property <length> last-w;
+    property <length> last-h;
 
     callback insert-text(string);
     callback chord(string) -> bool;
@@ -39,7 +59,24 @@ export component RichTextEditor inherits Rectangle {
     clip: true;
     forward-focus: scope;
 
+    // #1: report the viewport size from a Timer (after layout settles) instead of
+    // from the Flickable's `changed`/`init` geometry handlers, which fire *during*
+    // the layout flush and re-enter the property system → "Recursion detected".
+    Timer {
+        interval: 100ms;
+        running: true;
+        triggered => {
+            if (flick.width != root.last-w || flick.height != root.last-h) {
+                root.last-w = flick.width;
+                root.last-h = flick.height;
+                root.resized(flick.width, flick.height);
+            }
+        }
+    }
+
     scope := FocusScope {
+        width: 100%;
+        height: 100%;
         key-pressed(event) => {
             // Swallow every Ctrl-combo (handled as a shortcut) so control
             // characters are never inserted as text.
@@ -55,6 +92,7 @@ export component RichTextEditor inherits Rectangle {
             if (event.text == Key.DownArrow)   { root.special("down"); return EventResult.accept; }
             if (event.text == Key.Home)        { root.special("home"); return EventResult.accept; }
             if (event.text == Key.End)         { root.special("end");  return EventResult.accept; }
+            if (event.text == Key.Tab)         { root.special(event.modifiers.shift ? "outdent" : "indent"); return EventResult.accept; }
             if (event.text == Key.Return)      { root.insert-text("\n"); return EventResult.accept; }
             if (event.text != "") {
                 root.insert-text(event.text);
@@ -68,13 +106,14 @@ export component RichTextEditor inherits Rectangle {
         // viewport-relative, so we add `scroll-y` to reach the document space the
         // editor hit-tests in; the caret arrives already viewport-relative.
         flick := Flickable {
+            width: 100%;
+            height: 100%;
             interactive: false;
             viewport-height: self.height;
             viewport-width: self.width;
             viewport-y: 0;
-            changed width => { root.resized(self.width, self.height); }
-            changed height => { root.resized(self.width, self.height); }
-            init => { root.resized(self.width, self.height); }
+            // #1: NO `changed width/height` / `init` size reporting here — that
+            // fires mid-layout and recurses. The Timer above reports size instead.
 
             img := Image {
                 x: 0;
@@ -386,6 +425,7 @@ export component MainWindow inherits Window {
         // ---- editor ----------------------------------------------------------
         editor := RichTextEditor {
             vertical-stretch: 3;
+            doc-text: root.source-text; // mirror content for accessibility (#2)
         }
 
         // ---- live source preview --------------------------------------------

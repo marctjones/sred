@@ -94,7 +94,9 @@ impl SredWidget {
                 Command::DeleteForward
             }),
             Key::Enter => self.editor.apply(Command::Insert("\n".into())),
-            Key::Tab => self.editor.apply(Command::Insert("\t".into())),
+            Key::Tab => self
+                .editor
+                .apply(if shift { Command::Outdent } else { Command::Indent }),
             Key::A if doc => self.editor.apply(Command::SelectAll),
             Key::Z if doc => self
                 .editor
