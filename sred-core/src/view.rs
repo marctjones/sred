@@ -421,10 +421,8 @@ fn code_highlights(_text: &str) -> CodeHighlights {
 #[cfg(feature = "syntax-highlight")]
 fn code_highlights(text: &str) -> CodeHighlights {
     use std::sync::OnceLock;
-    use syntect::easy::HighlightLines;
     use syntect::highlighting::{Theme, ThemeSet};
     use syntect::parsing::SyntaxSet;
-    use syntect::util::LinesWithEndings;
 
     static RES: OnceLock<(SyntaxSet, Theme)> = OnceLock::new();
     let (ps, theme) = RES.get_or_init(|| {
@@ -455,32 +453,76 @@ fn code_highlights(text: &str) -> CodeHighlights {
             j += 1;
         }
         let body = lines[body_start..j].join("\n");
-        let syntax = ps
-            .find_syntax_by_token(lang)
-            .unwrap_or_else(|| ps.find_syntax_plain_text());
-        let mut hl = HighlightLines::new(syntax, theme);
-        for (k, line) in LinesWithEndings::from(&body).enumerate() {
-            let line_idx = body_start + k;
-            let Ok(ranges) = hl.highlight_line(line, ps) else {
-                continue;
-            };
-            let mut col = 0usize;
-            let mut spans = Vec::new();
-            for (style, piece) in ranges {
-                let n = piece.trim_end_matches(['\n', '\r']).chars().count();
-                if n > 0 {
-                    let c = style.foreground;
-                    spans.push((col, col + n, [c.r, c.g, c.b, 255]));
-                }
-                col += piece.chars().count();
-            }
-            if !spans.is_empty() {
-                out.insert(line_idx, spans);
-            }
+        // Cached per block by content — unchanged code blocks aren't re-highlighted.
+        for (rel, spans) in highlight_block(ps, theme, lang, &body) {
+            out.insert(body_start + rel, spans);
         }
         i = j; // resume at the closing fence (or end)
     }
     out
+}
+
+/// Syntax-highlight one fenced code block → per-line column ranges (relative to
+/// the block start), memoized by `(lang, body)` content hash so re-rendering an
+/// unchanged block is free.
+#[cfg(feature = "syntax-highlight")]
+fn highlight_block(
+    ps: &syntect::parsing::SyntaxSet,
+    theme: &syntect::highlighting::Theme,
+    lang: &str,
+    body: &str,
+) -> Vec<(usize, Vec<(usize, usize, [u8; 4])>)> {
+    use std::cell::RefCell;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use syntect::easy::HighlightLines;
+    use syntect::util::LinesWithEndings;
+
+    thread_local! {
+        static HL_CACHE: RefCell<HashMap<u64, Vec<(usize, Vec<(usize, usize, [u8; 4])>)>>> =
+            RefCell::new(HashMap::new());
+    }
+
+    let mut hasher = DefaultHasher::new();
+    lang.hash(&mut hasher);
+    body.hash(&mut hasher);
+    let key = hasher.finish();
+    if let Some(cached) = HL_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return cached;
+    }
+
+    let syntax = ps
+        .find_syntax_by_token(lang)
+        .unwrap_or_else(|| ps.find_syntax_plain_text());
+    let mut hl = HighlightLines::new(syntax, theme);
+    let mut block = Vec::new();
+    for (rel, line) in LinesWithEndings::from(body).enumerate() {
+        let Ok(ranges) = hl.highlight_line(line, ps) else {
+            continue;
+        };
+        let mut col = 0usize;
+        let mut spans = Vec::new();
+        for (style, piece) in ranges {
+            let n = piece.trim_end_matches(['\n', '\r']).chars().count();
+            if n > 0 {
+                let c = style.foreground;
+                spans.push((col, col + n, [c.r, c.g, c.b, 255]));
+            }
+            col += piece.chars().count();
+        }
+        if !spans.is_empty() {
+            block.push((rel, spans));
+        }
+    }
+
+    HL_CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() > 256 {
+            m.clear(); // simple bound; blocks re-highlight lazily
+        }
+        m.insert(key, block.clone());
+    });
+    block
 }
 
 fn push_runs(
