@@ -33,3 +33,26 @@ fn facade_click_moves_caret() {
     let near_end = ed.core_mut().cursor();
     assert!(near_end >= near_start, "clicking right moves caret right or equal");
 }
+
+#[test]
+fn click_is_document_space_and_scroll_independent() {
+    // A click at a fixed document-y must resolve to the same position whether or
+    // not the view is scrolled (the host's Flickable reports document coords).
+    let body = (0..40).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    let mut ed = Editor::from_source(&body, Format::Markdown);
+    ed.set_viewport(400, 120.0); // small viewport → scrollable
+    let _ = ed.render(true);
+
+    ed.click(20.0, 200.0);
+    let c_unscrolled = ed.core_mut().cursor();
+
+    ed.scroll_by(150.0);
+    let _ = ed.render(false);
+    ed.click(20.0, 200.0); // same document-y
+    let c_scrolled = ed.core_mut().cursor();
+
+    assert_eq!(
+        c_unscrolled, c_scrolled,
+        "document-space click must not change with scroll (no double-count)"
+    );
+}

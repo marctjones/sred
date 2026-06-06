@@ -156,15 +156,17 @@ impl Editor {
         self.core.apply(cmd);
     }
 
-    // ---- pointer input (x,y in px within the viewport) --------------------
+    // ---- pointer input ----------------------------------------------------
+    //
+    // Coordinates are in **document space** — the full-frame coordinate system,
+    // matching what a `TouchArea` inside a scroll container (Flickable) reports
+    // (its `mouse-y` already includes the scroll offset). Do NOT add `scroll_y`.
 
     fn hit(&mut self, x: f32, y: f32) -> usize {
         let (spans, deltas) = self.styled();
         let text = self.core.text();
-        // viewport y -> document y
-        let doc_y = y + self.scroll_y;
         self.renderer
-            .hit(&spans, &text, &deltas, self.width, &self.theme, x, doc_y)
+            .hit(&spans, &text, &deltas, self.width, &self.theme, x, y)
     }
 
     pub fn click(&mut self, x: f32, y: f32) {

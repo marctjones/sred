@@ -34,6 +34,8 @@ ed.set_viewport(width_px, height_px); // call again on resize
 // arrows:       ed.apply(Command::Move(Motion::Left));  // up/down: ed.move_vertical(false/true)
 // toolbar bold: ed.core_mut().apply(Command::ToggleMark(MarkSet::BOLD));
 // click:        ed.click(x, y);   drag: ed.drag(x, y);   dbl: ed.double_click(x, y)
+//   ^ x,y are in DOCUMENT space (the full-frame coords a TouchArea inside a
+//     Flickable reports — its mouse-y already includes the scroll). Don't add scroll.
 // wheel:        ed.scroll_by(-delta_y);
 
 let out = ed.render(/* follow caret = */ true);
