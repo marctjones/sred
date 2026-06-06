@@ -186,6 +186,32 @@ mod tests {
     }
 
     #[test]
+    fn markdown_inline_via_commonmark() {
+        // Per-display-char marks for a single (revealed) line.
+        fn marks_of(line: &str) -> Vec<MarkSet> {
+            let (spans, _) = view::styled_runs(line, Format::Markdown, 16.0, 0, &[], 0);
+            spans.iter().flat_map(|s| s.text.chars().map(move |_| s.marks)).collect()
+        }
+        // Nesting: **b _i_** → 'b' bold, 'i' bold+italic (the hand-rolled scanner
+        // couldn't nest reliably).  chars: * * b ␠ _ i _ * *
+        let m = marks_of("**b _i_**");
+        assert!(m[2].contains(MarkSet::BOLD), "b should be bold");
+        assert!(
+            m[5].contains(MarkSet::BOLD) && m[5].contains(MarkSet::ITALIC),
+            "i should be bold+italic"
+        );
+        // Code span protects emphasis: `*x*` → x is code, NOT italic.
+        let m = marks_of("`*x*`");
+        assert!(m[2].contains(MarkSet::CODE) && !m[2].contains(MarkSet::ITALIC));
+        // Inline link.
+        assert!(marks_of("see [t](u)").iter().any(|x| x.contains(MarkSet::LINK)));
+        // GFM strikethrough.
+        assert!(marks_of("~~gone~~")[2].contains(MarkSet::STRIKE));
+        // Unmatched delimiter is not emphasis (CommonMark).
+        assert!(!marks_of("a **b c")[3].contains(MarkSet::BOLD));
+    }
+
+    #[test]
     fn typst_live_preview_projects_markup() {
         // Typst headings use '=' (level = count); '- ' is a bullet.
         let src = "para\n= Heading\n- item";

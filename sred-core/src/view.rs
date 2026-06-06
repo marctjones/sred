@@ -435,21 +435,44 @@ fn line_marks(format: Format, line: &str) -> Vec<MarkSet> {
     }
 }
 
-/// Markdown inline marks (non-nested common cases).
+/// Markdown inline marks, parsed by `pulldown-cmark` (the CommonMark reference
+/// parser, + GFM strikethrough) rather than a hand-rolled scanner — so nesting,
+/// mismatched delimiters, code-span protection, and links follow the spec.
+///
+/// Operates on the line's *display* text (block markers already projected away),
+/// so emphasis/strong/code/strike/link spans line up with the rendered glyphs.
+/// Inline parsing is intra-line; cross-line constructs (reference-link
+/// definitions, setext headings) are a block-level / Phase-2 concern.
 fn line_marks_md(line: &str) -> Vec<MarkSet> {
-    let chars: Vec<char> = line.chars().collect();
-    let n = chars.len();
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    let n = line.chars().count();
     let mut marks = vec![MarkSet::empty(); n];
-    let mut code = vec![false; n];
+    if line.is_empty() {
+        return marks;
+    }
+    // Map source byte offset (at char boundaries) → char index.
+    let mut b2c = vec![n; line.len() + 1];
+    for (ci, (bi, _)) in line.char_indices().enumerate() {
+        b2c[bi] = ci;
+    }
+    b2c[line.len()] = n;
 
-    // inline code `...`
-    scan_pairs_single(&chars, '`', &mut marks, &mut code, MarkSet::CODE);
-
-    apply_pair(&chars, &code, &mut marks, "**", MarkSet::BOLD);
-    apply_pair(&chars, &code, &mut marks, "~~", MarkSet::STRIKE);
-    apply_single(&chars, &code, &mut marks, '*', MarkSet::ITALIC);
-    apply_single(&chars, &code, &mut marks, '_', MarkSet::ITALIC);
-    apply_links_marks(&chars, &code, &mut marks);
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    for (ev, range) in Parser::new_ext(line, opts).into_offset_iter() {
+        let bit = match ev {
+            Event::Start(Tag::Strong) => MarkSet::BOLD,
+            Event::Start(Tag::Emphasis) => MarkSet::ITALIC,
+            Event::Start(Tag::Strikethrough) => MarkSet::STRIKE,
+            Event::Start(Tag::Link { .. }) => MarkSet::LINK,
+            Event::Code(_) => MarkSet::CODE,
+            _ => continue,
+        };
+        let (cs, ce) = (b2c[range.start.min(line.len())], b2c[range.end.min(line.len())]);
+        for slot in marks.iter_mut().take(ce.min(n)).skip(cs) {
+            slot.insert(bit);
+        }
+    }
     marks
 }
 
@@ -483,39 +506,6 @@ fn scan_pairs_single(chars: &[char], delim: char, marks: &mut [MarkSet], code: &
                     code[k] = true;
                 }
                 i = j + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-}
-
-fn slice_eq(chars: &[char], at: usize, pat: &str) -> bool {
-    let p: Vec<char> = pat.chars().collect();
-    at + p.len() <= chars.len() && chars[at..at + p.len()] == p[..]
-}
-
-fn apply_pair(chars: &[char], code: &[bool], marks: &mut [MarkSet], pat: &str, bit: MarkSet) {
-    let plen = pat.chars().count();
-    let n = chars.len();
-    let mut i = 0;
-    while i + plen <= n {
-        if !code[i] && slice_eq(chars, i, pat) {
-            // find closing
-            let mut j = i + plen;
-            let mut close = None;
-            while j + plen <= n {
-                if !code[j] && slice_eq(chars, j, pat) {
-                    close = Some(j);
-                    break;
-                }
-                j += 1;
-            }
-            if let Some(c) = close {
-                for k in i..c + plen {
-                    marks[k].insert(bit);
-                }
-                i = c + plen;
                 continue;
             }
         }
@@ -587,15 +577,6 @@ fn links_in_line(line: &str) -> Vec<LinkSpan> {
         i += 1;
     }
     out
-}
-
-fn apply_links_marks(chars: &[char], _code: &[bool], marks: &mut [MarkSet]) {
-    let line: String = chars.iter().collect();
-    for lk in links_in_line(&line) {
-        for k in lk.start..=lk.end.min(marks.len().saturating_sub(1)) {
-            marks[k].insert(MarkSet::LINK);
-        }
-    }
 }
 
 // ---- syntax highlighting (syntect, feature-gated) -------------------------
