@@ -10,6 +10,7 @@
 //! - [`format`] / [`markdown`] / [`typst_fmt`] — document backends (used by the
 //!                  demo and tests; not on the source-anchored editing path).
 
+pub mod api;
 pub mod editor;
 pub mod format;
 pub mod layout;
@@ -18,6 +19,7 @@ pub mod model;
 pub mod typst_fmt;
 pub mod view;
 
+pub use api::{Editor, FrameOut};
 pub use editor::{BlockKind, Command, Decoration, EditorCore, Motion, Span};
 pub use format::{backend_for, Caps, DocumentFormat, FormatError};
 pub use layout::{Frame, TextRenderer, Theme};
