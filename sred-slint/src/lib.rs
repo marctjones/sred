@@ -182,12 +182,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
 fn build_window(initial: &str, format: Format) -> Result<MainWindow, slint::PlatformError> {
     let window = MainWindow::new()?;
     let ctl = Rc::new(RefCell::new(Controller::new(initial, format)));
-    refresh(&window, &ctl);
+    refresh(&window, &ctl, true);
 
     macro_rules! after {
         ($w:ident, $ctl:ident) => {
             if let Some(win) = $w.upgrade() {
-                refresh(&win, &$ctl);
+                refresh(&win, &$ctl, true);
             }
         };
     }
@@ -311,6 +311,17 @@ fn build_window(initial: &str, format: Format) -> Result<MainWindow, slint::Plat
         });
     }
 
+    // --- scroll (wheel / scrollbar) → re-render the new slice, no caret-follow -
+    {
+        let w = window.as_weak();
+        let ctl = ctl.clone();
+        window.on_scrolled(move |_y| {
+            if let Some(win) = w.upgrade() {
+                refresh(&win, &ctl, false);
+            }
+        });
+    }
+
     // --- resize -----------------------------------------------------------
     {
         let w = window.as_weak();
@@ -375,51 +386,47 @@ fn hit(ctl: &Rc<RefCell<Controller>>, x: f32, y: f32) -> usize {
     c.renderer.hit(&spans, &text, &pb, width, &theme, x, y)
 }
 
-/// Re-rasterize the document and push the frame + caret + source into the window.
-fn refresh(window: &MainWindow, ctl: &Rc<RefCell<Controller>>) {
+/// Re-rasterize the **visible slice** (viewport-bounded rendering) and push the
+/// frame + caret + source into the window. `follow` keeps the caret on screen
+/// after edits/clicks; pass `false` for plain scrolling so the view doesn't snap
+/// back to the caret. Caret-follow + scroll clamping happen inside
+/// `render_viewport`, which returns the resolved scroll.
+fn refresh(window: &MainWindow, ctl: &Rc<RefCell<Controller>>, follow: bool) {
     let mut c = ctl.borrow_mut();
     let width = c.width;
+    let vp_h = c.viewport_h;
     let theme = Theme::default();
     let (spans, prefix_bytes) = c.core.styled_runs(theme.font_size);
     let decorations = c.core.decorations();
     let text = c.core.text();
     let cursor = c.core.cursor();
     let selection = c.core.selection();
+    let scroll_in = window.get_scroll_y();
 
-    let out = c.renderer.render(
+    let out = c.renderer.render_viewport(
         &spans,
         &text,
         &prefix_bytes,
         &decorations,
         width,
+        vp_h as u32,
+        scroll_in,
+        follow,
         &theme,
         cursor,
         selection,
     );
 
+    // Viewport-sized frame + viewport-relative caret + resolved scroll.
     let img = rgba_to_image(&out.frame.rgba, out.frame.width, out.frame.height);
     window.set_frame(img);
-    window.set_doc_height(out.frame.height as f32);
+    window.set_doc_height(out.doc_height as f32);
     window.set_caret_x(out.caret.x);
     window.set_caret_y(out.caret.y);
     window.set_caret_h(out.caret.h);
     // Keep the caret visible even while a selection is active so it never "disappears".
     window.set_caret_on(true);
-
-    // Caret-follow autoscroll: keep the caret line within a "scroll-off" pad of
-    // both edges so the top/bottom line is never jammed against the border. When
-    // at the document ends, clamping reveals the full top/bottom margin.
-    let vp_h = c.viewport_h;
-    let doc_h = out.frame.height as f32;
-    let max_scroll = (doc_h - vp_h).max(0.0);
-    let pad = out.caret.h.min(vp_h * 0.3);
-    let mut scroll = window.get_scroll_y().clamp(0.0, max_scroll);
-    if out.caret.y - pad < scroll {
-        scroll = out.caret.y - pad;
-    } else if out.caret.y + out.caret.h + pad > scroll + vp_h {
-        scroll = out.caret.y + out.caret.h + pad - vp_h;
-    }
-    window.set_scroll_y(scroll.clamp(0.0, max_scroll));
+    window.set_scroll_y(out.scroll_y);
     window.set_source_text(c.core.source().into());
     // Show the URL of the link under the caret (if any) in the toolbar field.
     window.set_link_url(c.core.link_at_cursor().unwrap_or_default().into());
