@@ -142,11 +142,10 @@ impl Editor {
 
     /// Chip-background decorations for registered tokens that set `bg` (global
     /// source-char ranges). Foreground coloring is applied in `styled_runs`.
-    fn token_decorations(&self) -> Vec<(usize, usize, Decoration)> {
+    fn token_decorations_with(&self, text: &str) -> Vec<(usize, usize, Decoration)> {
         if self.tokens.is_empty() {
             return Vec::new();
         }
-        let text = self.core.text();
         let mut out = Vec::new();
         let mut line_start = 0usize;
         for line in text.split('\n') {
@@ -163,14 +162,18 @@ impl Editor {
         out
     }
 
-    fn styled(&self) -> (Vec<Span>, Vec<i32>) {
+    fn styled_with(&self, text: &str) -> (Vec<Span>, Vec<i32>) {
         crate::view::styled_runs(
-            &self.core.text(),
+            text,
             self.core.format(),
             self.theme.font_size,
             self.core.cursor_line(),
             &self.tokens,
         )
+    }
+
+    fn styled(&self) -> (Vec<Span>, Vec<i32>) {
+        self.styled_with(&self.core.text())
     }
 
     // ---- editing -----------------------------------------------------------
@@ -234,10 +237,12 @@ impl Editor {
     /// Rasterize the document and (if `follow`) nudge the scroll to keep the
     /// caret on screen. Call after any input; push `FrameOut` to your UI.
     pub fn render(&mut self, follow: bool) -> FrameOut {
-        let (spans, deltas) = self.styled();
-        let mut decorations = self.core.decorations();
-        decorations.extend(self.token_decorations());
+        // Compute the source text once and share it across the whole pipeline
+        // (was cloned 4× per render).
         let text = self.core.text();
+        let (spans, deltas) = self.styled_with(&text);
+        let mut decorations = crate::view::decorations(&text, self.core.format());
+        decorations.extend(self.token_decorations_with(&text));
         let cursor = self.core.cursor();
         let selection = self.core.selection();
 

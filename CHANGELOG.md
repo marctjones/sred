@@ -3,6 +3,12 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.2.0-alpha.2] — 2026-06-05
+
+### Performance
+- Facade `render()` computes the source text once and shares it across the
+  style/decoration/token passes (was cloned 4× per keystroke).
+
 ## [0.2.0-alpha.1] — 2026-06-05
 
 The "embeddable" milestone: sred became a **byte-lossless, source-anchored,
@@ -55,3 +61,4 @@ model with reconstructive save (superseded by the 0.2 source-anchored core).
 
 [0.2.0-alpha.1]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.1
 [0.1.0]: https://github.com/marctjones/sred/releases/tag/v0.1.0
+[0.2.0-alpha.2]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.2
