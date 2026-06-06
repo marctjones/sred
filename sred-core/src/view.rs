@@ -227,6 +227,7 @@ fn analyze(text: &str, format: Format) -> DocAnalysis {
         }
     }
     let md = matches!(format, Format::Markdown).then(|| scan_md(text, &raw, &is_fence, &interior));
+    let typ = matches!(format, Format::Typst).then(|| scan_typst(text, &raw));
 
     let mut lines = Vec::with_capacity(raw.len());
     for (li, &line) in raw.iter().enumerate() {
@@ -239,8 +240,10 @@ fn analyze(text: &str, format: Format) -> DocAnalysis {
             LineInfo::new(line, marker, 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], colors)
         } else if let Some(md) = &md {
             analyze_prose_md(line, &md[li])
+        } else if let Some(typ) = &typ {
+            analyze_prose_typst(line, &typ[li])
         } else {
-            analyze_prose_typst(line)
+            unreachable!("format is Markdown or Typst")
         };
         lines.push(info);
     }
@@ -270,11 +273,135 @@ fn analyze_prose_md(line: &str, f: &MdLineFacts) -> LineInfo {
     LineInfo::new(line, marker, scale, extra, false, f.inline.clone(), vec![None; n])
 }
 
-fn analyze_prose_typst(line: &str) -> LineInfo {
-    let (marker, scale, extra) = classify_block_typst(line);
-    let inline = line_marks_typst(line);
-    let n = inline.len();
-    LineInfo::new(line, marker, scale, extra, false, inline, vec![None; n])
+fn analyze_prose_typst(line: &str, f: &TypstLineFacts) -> LineInfo {
+    let n = line.chars().count();
+    LineInfo::new(line, f.marker, f.scale, f.extra, false, f.inline.clone(), vec![None; n])
+}
+
+/// Per-line output of the whole-document Typst scan ([`scan_typst`]).
+#[derive(Clone)]
+struct TypstLineFacts {
+    /// Per-SOURCE-char inline marks (from the typst-syntax highlighter).
+    inline: Vec<MarkSet>,
+    /// The line's hideable block marker (heading `=`-run, `- ` list, `/ ` term),
+    /// or [`Marker::NONE`] (paragraphs, `+ ` enums kept visible).
+    marker: Marker,
+    /// Heading font-size multiplier; `1.0` otherwise.
+    scale: f32,
+    /// Whole-line marks (heading `BOLD`).
+    extra: MarkSet,
+}
+
+/// One whole-document `typst-syntax` parse → per-line inline marks + block
+/// markers, read from the real grammar tree (Step C). Heading depth comes from
+/// the `HeadingMarker` length; `ListItem`/`EnumItem`/`TermItem` are recognised by
+/// their marker nodes; marker byte ranges (and thus deltas) come from node
+/// ranges, so nested/indented markers keep their indentation.
+fn scan_typst(text: &str, lines: &[&str]) -> Vec<TypstLineFacts> {
+    use typst_syntax::{parse, LinkedNode};
+
+    let mut facts: Vec<TypstLineFacts> = lines
+        .iter()
+        .map(|l| TypstLineFacts {
+            inline: vec![MarkSet::empty(); l.chars().count()],
+            marker: Marker::NONE,
+            scale: 1.0,
+            extra: MarkSet::empty(),
+        })
+        .collect();
+
+    let mut starts = Vec::with_capacity(lines.len());
+    {
+        let mut off = 0usize;
+        for l in lines {
+            starts.push(off);
+            off += l.len() + 1;
+        }
+    }
+    let line_of = |byte: usize| -> usize {
+        match starts.binary_search(&byte) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        }
+    };
+
+    let bytes = text.as_bytes();
+    let root = parse(text);
+    walk_typst(&LinkedNode::new(&root), text, bytes, &starts, &line_of, &mut facts);
+    facts
+}
+
+fn walk_typst(
+    node: &typst_syntax::LinkedNode,
+    text: &str,
+    bytes: &[u8],
+    starts: &[usize],
+    line_of: &impl Fn(usize) -> usize,
+    facts: &mut [TypstLineFacts],
+) {
+    use typst_syntax::SyntaxKind;
+    let r = node.range();
+    // Block marker (the leading construct on its line).
+    let k = node.kind();
+    if matches!(
+        k,
+        SyntaxKind::HeadingMarker | SyntaxKind::ListMarker | SyntaxKind::EnumMarker | SyntaxKind::TermMarker
+    ) {
+        let li = line_of(r.start);
+        let col = r.start - starts[li];
+        // Only the first marker on a line is the block marker (outer of nested).
+        if facts[li].marker.len == 0 && facts[li].extra.is_empty() && col_is_leading(text, starts[li], r.start) {
+            let mlen = r.end - r.start;
+            let space = usize::from(bytes.get(r.end) == Some(&b' '));
+            match k {
+                SyntaxKind::HeadingMarker => {
+                    facts[li].marker = Marker { start: col, len: mlen + space, repl: "" };
+                    facts[li].scale = heading_scale(mlen);
+                    facts[li].extra = MarkSet::BOLD;
+                }
+                SyntaxKind::ListMarker => {
+                    facts[li].marker = Marker { start: col, len: mlen + space, repl: BULLET };
+                }
+                SyntaxKind::TermMarker => {
+                    facts[li].marker = Marker { start: col, len: mlen + space, repl: "" };
+                }
+                // Enum `+ ` markers carry auto-numbering meaning → kept visible.
+                _ => {}
+            }
+        }
+    }
+    // Inline mark, clipped per line (a node may span lines, e.g. block math).
+    if let Some(bit) = typst_inline_bit(node) {
+        let mut b = r.start;
+        while b < r.end {
+            let li = line_of(b);
+            let lstart = starts[li];
+            let lend = lstart + facts_line_len(text, lstart);
+            let seg_end = r.end.min(lend);
+            if seg_end > b {
+                let cs = text[lstart..b].chars().count();
+                let ce = text[lstart..seg_end].chars().count();
+                for slot in facts[li].inline[cs..ce].iter_mut() {
+                    slot.insert(bit);
+                }
+            }
+            b = (lend + 1).max(b + 1);
+        }
+    }
+    for child in node.children() {
+        walk_typst(&child, text, bytes, starts, line_of, facts);
+    }
+}
+
+/// True when the bytes between the line start and `pos` are only spaces (so the
+/// marker is genuinely the line's leading construct, not mid-line content).
+fn col_is_leading(text: &str, line_start: usize, pos: usize) -> bool {
+    text[line_start..pos].bytes().all(|b| b == b' ')
+}
+
+/// Byte length of the line starting at `line_start` (up to the next '\n' or EOF).
+fn facts_line_len(text: &str, line_start: usize) -> usize {
+    text[line_start..].split('\n').next().map_or(0, str::len)
 }
 
 /// Per-line output of the whole-document Markdown scan ([`scan_md`]).
@@ -602,23 +729,6 @@ fn classify_block_md(line: &str) -> (Marker, f32, MarkSet) {
     (Marker::NONE, 1.0, MarkSet::empty())
 }
 
-/// Typst block-marker classification (Level 1). Headings use `=` runs; `- ` is an
-/// unordered list, `+ ` an enum (kept visible like Markdown's numbered lists).
-fn classify_block_typst(line: &str) -> (Marker, f32, MarkSet) {
-    let eqs = line.chars().take_while(|c| *c == '=').count();
-    if (1..=6).contains(&eqs) && line[eqs..].starts_with(' ') {
-        return (Marker::lead(eqs + 1, ""), heading_scale(eqs), MarkSet::BOLD); // "== "
-    }
-    if line.starts_with("- ") {
-        return (Marker::lead(2, BULLET), 1.0, MarkSet::empty());
-    }
-    if line.starts_with("+ ") {
-        // Typst enum marker — keep visible (carries auto-numbering meaning).
-        return (Marker::NONE, 1.0, MarkSet::empty());
-    }
-    (Marker::NONE, 1.0, MarkSet::empty())
-}
-
 /// Heading font-size multiplier by level (1 = largest).
 fn heading_scale(level: usize) -> f32 {
     match level {
@@ -800,31 +910,36 @@ fn line_marks_typst(line: &str) -> Vec<MarkSet> {
     marks
 }
 
-fn typst_marks_walk(node: &typst_syntax::LinkedNode, b2c: &[usize], n: usize, marks: &mut [MarkSet]) {
+/// Inline mark for one typst node, from the crate's own `highlight()` categorizer
+/// (plus the `Equation` special case). Shared by the per-line decorator pass
+/// ([`typst_marks_walk`]) and the whole-document [`scan_typst`] pass.
+fn typst_inline_bit(node: &typst_syntax::LinkedNode) -> Option<MarkSet> {
     use typst_syntax::{highlight, SyntaxKind, Tag};
     // `highlight()` returns None for the `Equation` node (its `$` + inner tokens
     // are tagged separately); style the whole math span like code instead.
-    let bit = if node.kind() == SyntaxKind::Equation {
-        Some(MarkSet::CODE)
-    } else {
-        match highlight(node) {
-            Some(Tag::Strong) => Some(MarkSet::BOLD),
-            Some(Tag::Emph) => Some(MarkSet::ITALIC),
-            Some(Tag::Raw) | Some(Tag::MathDelimiter) | Some(Tag::MathOperator) => Some(MarkSet::CODE),
-            Some(Tag::Link) | Some(Tag::Ref) | Some(Tag::Label) => Some(MarkSet::LINK),
-            Some(Tag::Keyword)
-            | Some(Tag::Function)
-            | Some(Tag::Number)
-            | Some(Tag::String)
-            | Some(Tag::Interpolated)
-            | Some(Tag::Operator)
-            | Some(Tag::Punctuation) => Some(MarkSet::CODE),
-            // Heading / ListMarker / Comment / Escape / Error: block-level or not
-            // styled inline.
-            _ => None,
-        }
-    };
-    if let Some(bit) = bit {
+    if node.kind() == SyntaxKind::Equation {
+        return Some(MarkSet::CODE);
+    }
+    match highlight(node) {
+        Some(Tag::Strong) => Some(MarkSet::BOLD),
+        Some(Tag::Emph) => Some(MarkSet::ITALIC),
+        Some(Tag::Raw) | Some(Tag::MathDelimiter) | Some(Tag::MathOperator) => Some(MarkSet::CODE),
+        Some(Tag::Link) | Some(Tag::Ref) | Some(Tag::Label) => Some(MarkSet::LINK),
+        Some(Tag::Keyword)
+        | Some(Tag::Function)
+        | Some(Tag::Number)
+        | Some(Tag::String)
+        | Some(Tag::Interpolated)
+        | Some(Tag::Operator)
+        | Some(Tag::Punctuation) => Some(MarkSet::CODE),
+        // Heading / ListMarker / Comment / Escape / Error: block-level or not
+        // styled inline.
+        _ => None,
+    }
+}
+
+fn typst_marks_walk(node: &typst_syntax::LinkedNode, b2c: &[usize], n: usize, marks: &mut [MarkSet]) {
+    if let Some(bit) = typst_inline_bit(node) {
         let r = node.range();
         let cs = *b2c.get(r.start).unwrap_or(&n);
         let ce = *b2c.get(r.end).unwrap_or(&n);
