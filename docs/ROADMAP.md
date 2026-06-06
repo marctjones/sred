@@ -146,7 +146,7 @@ fidelity suite against the **real notes corpus**; do a perf pass.
 
 ## Post-0.2.0 — full format support (parser-driven)
 
-> **Phase 2 (block-level) is DONE** (0.3.0-alpha.2). The dedicated plan it was
+> **Phase 2 (block-level) is DONE** (0.3.0). The dedicated plan it was
 > built from is [`docs/MF_PHASE2.md`](MF_PHASE2.md) — architecture (doc-level
 > analysis + caret-aware projection), invariants, and the step-by-step plan.
 
@@ -164,7 +164,7 @@ project rule of leveraging existing libraries rather than duplicating them.
   `pulldown-cmark` (+ GFM strikethrough) and maps Strong/Emphasis/Code/
   Strikethrough/Link spans — spec-correct nesting, delimiter matching, code-span
   protection, links. Per-line projection/delta/marker-hiding machinery unchanged.
-- **Block: DONE** (0.3.0-alpha.2). A single whole-document `pulldown-cmark`
+- **Block: DONE** (0.3.0). A single whole-document `pulldown-cmark`
   `into_offset_iter()` pass (`scan_md`) drives setext headings, indented code
   (lazy-continuation-aware), task lists, GFM tables, reference links, and nested
   lists/quotes. Marker hiding + exact deltas via `Marker { start, len, repl }`;
@@ -177,7 +177,7 @@ project rule of leveraging existing libraries rather than duplicating them.
   `LinkedNode` tree using the crate's own `highlight()`/`Tag` categorizer —
   strong/emph/raw, math, refs/labels, and `#`-code-mode tokens. Supersedes the
   Level-1 hand-rolled recognizer.
-- **Block + color: DONE** (0.3.0-alpha.2). `scan_typst` reads heading depth and
+- **Block + color: DONE** (0.3.0). `scan_typst` reads heading depth and
   list/enum/term markers from the `typst-syntax` tree (marker byte ranges → exact
   deltas, indentation preserved). Per-token *colors* (keyword/function/number/
   string/comment/operator) flow through a `SynCat` channel resolved at projection

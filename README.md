@@ -14,8 +14,8 @@ surface.
 > under one 60 fps frame regardless of note length). Noet consumes it as the sole
 > note editor today.
 >
-> **0.3.0 (in progress):** styling is driven entirely by the real parsers.
-> *Inline* (alpha.1) and *block-level* (alpha.2) CommonMark — setext headings,
+> **0.3.0:** styling is driven entirely by the real parsers.
+> *Inline* and *block-level* CommonMark — setext headings,
 > indented code, task lists, GFM tables, reference links, nested lists/quotes —
 > plus Typst blocks read from the `typst-syntax` tree and per-token syntax colors.
 > See [`docs/ROADMAP.md`](docs/ROADMAP.md) → "Post-0.2.0 — full format support"
@@ -137,14 +137,14 @@ way today.
   line-splice updates + viewport-bounded rasterization + per-line styling cache.
   A keystroke (including Enter/paste) is under one 60 fps frame at any note length
   (4000 lines ≈ 13 ms, was ~1.9 s). See [`docs/PERF.md`](docs/PERF.md).
-- ✅ **Parser-driven styling** (0.3.0-alpha) — inline + block-level CommonMark via
+- ✅ **Parser-driven styling** (0.3.0) — inline + block-level CommonMark via
   `pulldown-cmark` (setext, indented code, task lists, GFM tables, reference links,
   nested lists/quotes) and Typst blocks via the `typst-syntax` tree, with
   per-token syntax colors. Caret-independent `analyze()` + cheap `project()`.
 - ✅ **Syntect** code highlighting (`syntax-highlight` feature); scrolling
   (wheel + scrollbar + caret-follow); `can_undo()`/`can_redo()`.
 
-### Known limitations (→ 0.3.0)
+### Known limitations
 - **Styling is decoupled from fidelity** (the buffer is the source of truth); the
   parser-driven marks/colors are cosmetic. HTML blocks are a remaining CommonMark
   nicety; thematic breaks aren't yet specially styled.

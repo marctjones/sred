@@ -3,7 +3,14 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
-## [0.3.0-alpha.2] — 2026-06-06
+## [0.3.0] — 2026-06-06
+
+**Milestone: parser-driven styling, inline *and* block-level.** Rolls up the
+`0.3.0-alpha.*` line. All Markdown/Typst styling is now driven by the real
+parsers (`pulldown-cmark`, `typst-syntax`) — inline (alpha.1) plus the
+block-level / cross-line constructs below (alpha.2) — with per-token syntax
+colors, while keeping byte fidelity, exact cursor mapping, Live Preview, and flat
+per-keystroke performance.
 
 ### Added — Phase 2: block-level CommonMark & Typst + per-token colors
 
