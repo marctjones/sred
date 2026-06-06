@@ -68,17 +68,36 @@ pub struct TokenSpec {
 // in `project()` from the marker byte range that `analyze()` records, so it stays
 // correct by construction.
 
+/// A line's hideable block marker. Off the caret line, `src[start..start+len]` is
+/// replaced by `repl` (the leading `src[..start]` indentation is always shown);
+/// on the caret line the marker is shown verbatim. The byte delta is therefore
+/// `repl.len() − len`, independent of indentation.
+#[derive(Clone, Copy)]
+struct Marker {
+    /// Byte offset where the hideable marker begins (indentation before it stays).
+    start: usize,
+    /// Byte length of the hideable marker (`"## "`, `"- "`, `"> "`, `"- [ ] "`, or
+    /// a whole ```` ``` ```` fence / setext-underline line).
+    len: usize,
+    /// Substitute shown when hidden: `""` to drop it, `"• "`/checkbox to replace.
+    repl: &'static str,
+}
+
+impl Marker {
+    /// No hideable marker (paragraphs, numbered lists, code interiors, tables).
+    const NONE: Marker = Marker { start: 0, len: 0, repl: "" };
+    /// A leading marker (no indentation) of `len` bytes shown as `repl` when hidden.
+    fn lead(len: usize, repl: &'static str) -> Marker {
+        Marker { start: 0, len, repl }
+    }
+}
+
 /// Caret-independent per-line facts produced by [`analyze`]. Everything a full
 /// parse determines that does NOT depend on where the caret is.
 #[derive(Clone)]
 struct LineInfo {
-    /// Leading SOURCE bytes that form the hideable block marker (`"## "`, `"- "`,
-    /// `"> "`, or the whole ```` ``` ```` fence line). Replaced by `repl` when the
-    /// line is projected off-caret; shown verbatim on the caret line. `0` ⇒ no
-    /// hideable marker (paragraphs, numbered lists, code interiors).
-    marker_len: usize,
-    /// What the hidden marker is replaced by: `""` to drop it, `"• "` for bullets.
-    repl: &'static str,
+    /// The hideable block marker (Live Preview), or [`Marker::NONE`].
+    marker: Marker,
     /// Whole-line font-size multiplier (headings scale up); `1.0` otherwise. Kept
     /// base-independent so the analysis cache survives a font-size change.
     scale: f32,
@@ -93,8 +112,8 @@ struct LineInfo {
     /// Step D). `None` where uncolored.
     colors: Vec<Option<[u8; 4]>>,
     /// Hash of all of the above + the source text: the [`project`] cache seed.
-    /// Captures every cross-line dependency (fence state, future setext/refs) so
-    /// a per-line project cache stays correct even when a line's rendering depends
+    /// Captures every cross-line dependency (fence state, setext, refs) so a
+    /// per-line project cache stays correct even when a line's rendering depends
     /// on its neighbors.
     digest: u64,
 }
@@ -102,8 +121,7 @@ struct LineInfo {
 impl LineInfo {
     fn new(
         line: &str,
-        marker_len: usize,
-        repl: &'static str,
+        marker: Marker,
         scale: f32,
         extra: MarkSet,
         is_code: bool,
@@ -113,8 +131,9 @@ impl LineInfo {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         line.hash(&mut h);
-        marker_len.hash(&mut h);
-        repl.hash(&mut h);
+        marker.start.hash(&mut h);
+        marker.len.hash(&mut h);
+        marker.repl.hash(&mut h);
         scale.to_bits().hash(&mut h);
         extra.bits().hash(&mut h);
         is_code.hash(&mut h);
@@ -125,7 +144,7 @@ impl LineInfo {
             c.hash(&mut h);
         }
         let digest = h.finish();
-        LineInfo { marker_len, repl, scale, extra, is_code, inline, colors, digest }
+        LineInfo { marker, scale, extra, is_code, inline, colors, digest }
     }
 }
 
@@ -186,41 +205,208 @@ fn analyze_cached(text: &str, format: Format) -> std::rc::Rc<DocAnalysis> {
 
 /// One whole-document parse → per-line caret-independent facts. Tracks fenced
 /// code across lines (so a code line's classification depends on context, which
-/// is why this is doc-level), highlights code once, and classifies each prose
-/// line's block marker + inline marks.
+/// is why this is doc-level), highlights code once, and — for Markdown — runs a
+/// single whole-document `pulldown-cmark` pass ([`scan_md`]) so cross-line
+/// constructs (setext headings, indented code, reference links, tables) and all
+/// inline marks come from the reference parser.
 fn analyze(text: &str, format: Format) -> DocAnalysis {
     let highlights = code_highlights(text);
-    let mut lines = Vec::new();
-    let mut in_fence = false;
-    for (li, line) in text.split('\n').enumerate() {
-        let is_fence = line.trim_start().starts_with("```");
-        let interior = in_fence && !is_fence;
-        if is_fence {
-            in_fence = !in_fence;
+    let raw: Vec<&str> = text.split('\n').collect();
+    // Fence membership first: a ``` delimiter / its interior is code regardless
+    // of what the block parser thinks, and is hidden/shown by caret state below.
+    let mut is_fence = vec![false; raw.len()];
+    let mut interior = vec![false; raw.len()];
+    {
+        let mut in_fence = false;
+        for (i, line) in raw.iter().enumerate() {
+            is_fence[i] = line.trim_start().starts_with("```");
+            interior[i] = in_fence && !is_fence[i];
+            if is_fence[i] {
+                in_fence = !in_fence;
+            }
         }
-        let info = if is_fence || interior {
+    }
+    let md = matches!(format, Format::Markdown).then(|| scan_md(text, &raw, &is_fence, &interior));
+
+    let mut lines = Vec::with_capacity(raw.len());
+    for (li, &line) in raw.iter().enumerate() {
+        let info = if is_fence[li] || interior[li] {
             // Fence delimiter hides fully off-caret (marker = whole line); an
             // interior line is always shown (no marker).
             let n = line.chars().count();
-            let marker_len = if is_fence { line.len() } else { 0 };
+            let marker = if is_fence[li] { Marker::lead(line.len(), "") } else { Marker::NONE };
             let colors = line_code_colors(highlights.get(&li), n);
-            LineInfo::new(line, marker_len, "", 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], colors)
+            LineInfo::new(line, marker, 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], colors)
+        } else if let Some(md) = &md {
+            analyze_prose_md(line, &md[li])
         } else {
-            analyze_prose(format, line)
+            analyze_prose_typst(line)
         };
         lines.push(info);
     }
     DocAnalysis { lines }
 }
 
-/// Classify one prose line: its hideable block marker + scale + whole-line marks
-/// (`classify_block`), then its inline markup (`line_marks`). Both are functions
-/// of the line alone in Step A; cross-line constructs are added in Steps B/C.
-fn analyze_prose(format: Format, line: &str) -> LineInfo {
-    let (marker_len, repl, scale, extra) = classify_block(format, line);
-    let inline = line_marks(format, line);
+/// Build a prose Markdown line's [`LineInfo`] from its parser-derived facts:
+/// setext headings/underlines and indented code override the per-line block
+/// classification; everything else uses [`classify_block_md`] for the marker and
+/// the whole-document inline marks for styling.
+fn analyze_prose_md(line: &str, f: &MdLineFacts) -> LineInfo {
+    let n = line.chars().count();
+    if f.setext_underline {
+        // The `===` / `---` line: hide it fully off-caret (it only existed to mark
+        // the line above as a heading); show it verbatim on the caret line.
+        return LineInfo::new(line, Marker::lead(line.len(), ""), 1.0, MarkSet::empty(), false, vec![MarkSet::empty(); n], vec![None; n]);
+    }
+    if f.indented_code {
+        return LineInfo::new(line, Marker::NONE, 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], vec![None; n]);
+    }
+    let (marker, scale, extra) = if let Some(level) = f.setext_level {
+        // Setext title: the text stays (no marker), but scales up + bolds.
+        (Marker::NONE, heading_scale(level as usize), MarkSet::BOLD)
+    } else {
+        classify_block_md(line)
+    };
+    LineInfo::new(line, marker, scale, extra, false, f.inline.clone(), vec![None; n])
+}
+
+fn analyze_prose_typst(line: &str) -> LineInfo {
+    let (marker, scale, extra) = classify_block_typst(line);
+    let inline = line_marks_typst(line);
     let n = inline.len();
-    LineInfo::new(line, marker_len, repl, scale, extra, false, inline, vec![None; n])
+    LineInfo::new(line, marker, scale, extra, false, inline, vec![None; n])
+}
+
+/// Per-line output of the whole-document Markdown scan ([`scan_md`]).
+#[derive(Clone)]
+struct MdLineFacts {
+    /// Per-SOURCE-char inline marks (strong/emph/code/strike/link incl. reference
+    /// links), plus table styling (header bold, pipes code).
+    inline: Vec<MarkSet>,
+    /// `Some(level)` when this line is the *title* of a setext heading.
+    setext_level: Option<u8>,
+    /// This line is a setext `===`/`---` underline (hidden off-caret).
+    setext_underline: bool,
+    /// This line sits inside a 4-space/tab indented code block.
+    indented_code: bool,
+}
+
+/// One whole-document `pulldown-cmark` pass (the CommonMark reference parser, with
+/// GFM strikethrough/tables/task-lists). Produces per-line inline marks and the
+/// cross-line block facts (setext, indented code, tables) that a per-line scan
+/// can't see. Reference links resolve here for free — the parser sees the whole
+/// document, so `[text][ref]` against a `[ref]: url` defined elsewhere is a LINK.
+///
+/// Fenced-code lines (tracked separately, authoritatively, by [`analyze`]) are
+/// left blank here; the marker hiding + deltas for ATX headings, quotes and lists
+/// stay in [`classify_block_md`]. This pass only contributes inline marks and the
+/// setext/indented-code/table classifications.
+fn scan_md(text: &str, lines: &[&str], is_fence: &[bool], interior: &[bool]) -> Vec<MdLineFacts> {
+    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
+
+    let mut facts: Vec<MdLineFacts> = lines
+        .iter()
+        .map(|l| MdLineFacts {
+            inline: vec![MarkSet::empty(); l.chars().count()],
+            setext_level: None,
+            setext_underline: false,
+            indented_code: false,
+        })
+        .collect();
+
+    // Byte offset of each line's start in `text`, for mapping parser byte ranges
+    // back to (line, char-column).
+    let mut starts = Vec::with_capacity(lines.len());
+    {
+        let mut off = 0usize;
+        for l in lines {
+            starts.push(off);
+            off += l.len() + 1; // + '\n'
+        }
+    }
+    let line_of = |byte: usize| -> usize {
+        match starts.binary_search(&byte) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        }
+    };
+    // Apply `bit` over a (possibly multi-line) byte range, clipped per line.
+    let apply = |facts: &mut [MdLineFacts], s: usize, e: usize, bit: MarkSet| {
+        let mut b = s;
+        while b < e {
+            let li = line_of(b);
+            let lstart = starts[li];
+            let lend = lstart + lines[li].len(); // exclusive of the '\n'
+            let seg_end = e.min(lend);
+            if seg_end > b {
+                let cs = lines[li][..b - lstart].chars().count();
+                let ce = lines[li][..seg_end - lstart].chars().count();
+                for slot in facts[li].inline[cs..ce].iter_mut() {
+                    slot.insert(bit);
+                }
+            }
+            b = (lend + 1).max(b + 1); // advance to next line (skip the '\n')
+        }
+    };
+
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_TASKLISTS);
+
+    let mut tables: Vec<(usize, usize)> = Vec::new(); // (first line, last line)
+    for (ev, r) in Parser::new_ext(text, opts).into_offset_iter() {
+        match ev {
+            Event::Start(Tag::Strong) => apply(&mut facts, r.start, r.end, MarkSet::BOLD),
+            Event::Start(Tag::Emphasis) => apply(&mut facts, r.start, r.end, MarkSet::ITALIC),
+            Event::Start(Tag::Strikethrough) => apply(&mut facts, r.start, r.end, MarkSet::STRIKE),
+            Event::Start(Tag::Link { .. }) => apply(&mut facts, r.start, r.end, MarkSet::LINK),
+            Event::Code(_) => apply(&mut facts, r.start, r.end, MarkSet::CODE),
+            Event::Start(Tag::Heading { level, .. }) => {
+                // A setext heading's source spans >1 line (title + underline);
+                // an ATX heading is single-line (handled by classify_block_md).
+                let l0 = line_of(r.start);
+                let l1 = line_of(r.end.saturating_sub(1));
+                if l1 > l0 {
+                    facts[l0].setext_level = Some(level as u8);
+                    for f in &mut facts[l0 + 1..=l1] {
+                        f.setext_underline = true;
+                    }
+                }
+            }
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)) => {
+                let l0 = line_of(r.start);
+                let hi = line_of(r.end.saturating_sub(1)).min(lines.len().saturating_sub(1));
+                for f in &mut facts[l0..=hi] {
+                    f.indented_code = true;
+                }
+            }
+            Event::Start(Tag::Table(_)) => {
+                tables.push((line_of(r.start), line_of(r.end.saturating_sub(1))));
+            }
+            _ => {}
+        }
+    }
+
+    // Table styling: bold the header row, code the column separators. Source is
+    // kept (no marker), so this is purely cosmetic inline marking.
+    for (l0, l1) in tables {
+        for li in l0..=l1.min(lines.len().saturating_sub(1)) {
+            if is_fence[li] || interior[li] {
+                continue;
+            }
+            for (ci, c) in lines[li].chars().enumerate() {
+                if li == l0 {
+                    facts[li].inline[ci].insert(MarkSet::BOLD);
+                }
+                if c == '|' {
+                    facts[li].inline[ci].insert(MarkSet::CODE);
+                }
+            }
+        }
+    }
+
+    facts
 }
 
 /// Project one line for display (caret-DEPENDENT, cheap): hide/substitute its
@@ -229,14 +415,16 @@ fn analyze_prose(format: Format, line: &str) -> LineInfo {
 /// spans. Returns the spans and the byte delta `display_leading − source_leading`.
 fn project_line(info: &LineInfo, line: &str, on_caret: bool, base: f32, tokens: &[TokenSpec]) -> (Vec<Span>, i32) {
     let size = base * info.scale;
-    let reveal = on_caret || info.marker_len == 0;
+    let m = info.marker;
+    let reveal = on_caret || m.len == 0;
     let (display, delta) = if reveal {
         (line.to_string(), 0)
     } else {
-        let mut d = String::with_capacity(info.repl.len() + line.len() - info.marker_len);
-        d.push_str(info.repl);
-        d.push_str(&line[info.marker_len..]);
-        (d, info.repl.len() as i32 - info.marker_len as i32)
+        let mut d = String::with_capacity(m.start + m.repl.len() + line.len() - (m.start + m.len));
+        d.push_str(&line[..m.start]); // indentation, shown verbatim
+        d.push_str(m.repl);
+        d.push_str(&line[m.start + m.len..]);
+        (d, m.repl.len() as i32 - m.len as i32)
     };
 
     let disp_n = display.chars().count();
@@ -249,17 +437,24 @@ fn project_line(info: &LineInfo, line: &str, on_caret: bool, base: f32, tokens: 
             colors[i] = info.colors[i];
         }
     } else {
-        // Hidden: [0..repl_chars) is the substitute (carries only `extra`), the
-        // rest are source chars past the marker, shifted into display space.
-        let repl_chars = info.repl.chars().count();
-        let marker_src_chars = line[..info.marker_len].chars().count();
-        for slot in marks.iter_mut().take(repl_chars) {
+        // Hidden: [indent] [repl] [source past the marker]. The indentation maps
+        // 1:1 from source; the repl substitute carries only `extra`; the tail is
+        // the source after the marker, shifted into display space.
+        let indent_chars = line[..m.start].chars().count();
+        let repl_chars = m.repl.chars().count();
+        let marker_src_chars = line[m.start..m.start + m.len].chars().count();
+        for k in 0..indent_chars {
+            marks[k] = info.inline[k] | info.extra;
+            colors[k] = info.colors[k];
+        }
+        for slot in marks.iter_mut().skip(indent_chars).take(repl_chars) {
             *slot = info.extra;
         }
-        for k in 0..disp_n.saturating_sub(repl_chars) {
-            let si = marker_src_chars + k;
-            marks[repl_chars + k] = info.inline[si] | info.extra;
-            colors[repl_chars + k] = info.colors[si];
+        let head = indent_chars + repl_chars;
+        for k in 0..disp_n.saturating_sub(head) {
+            let si = indent_chars + marker_src_chars + k;
+            marks[head + k] = info.inline[si] | info.extra;
+            colors[head + k] = info.colors[si];
         }
     }
 
@@ -358,53 +553,70 @@ pub(crate) fn clear_style_cache() {
 /// Bullet substitution glyph: U+2022 + space (4 bytes, 2 chars). Replaces a
 /// 2-byte `"- "`/`"* "`/`"+ "` marker, so the byte delta is `+2`.
 const BULLET: &str = "• ";
+/// Task-list checkbox glyphs (each + a trailing space = 4 bytes, 2 chars).
+/// Replace the 6-byte `"- [ ] "` / `"- [x] "` marker (byte delta `−2`).
+const TASK_OPEN: &str = "☐ "; // U+2610 BALLOT BOX
+const TASK_DONE: &str = "☑ "; // U+2611 BALLOT BOX WITH CHECK
 
-/// Classify a prose line's hideable block marker → `(marker_len, repl, scale,
-/// extra)`, dispatched by format. `marker_len == 0` means nothing is hidden
-/// (paragraphs, numbered lists). See [`LineInfo`] for field meanings.
-fn classify_block(format: Format, line: &str) -> (usize, &'static str, f32, MarkSet) {
-    match format {
-        Format::Typst => classify_block_typst(line),
-        _ => classify_block_md(line),
-    }
+/// Leading-space indentation of a line, in bytes (= chars, spaces are ASCII).
+fn indent_width(line: &str) -> usize {
+    line.len() - line.trim_start_matches(' ').len()
 }
 
-fn classify_block_md(line: &str) -> (usize, &'static str, f32, MarkSet) {
-    let hashes = line.chars().take_while(|c| *c == '#').count();
-    if (1..=6).contains(&hashes) && line[hashes..].starts_with(' ') {
-        return (hashes + 1, "", heading_scale(hashes), MarkSet::BOLD); // "### "
+/// Classify a prose Markdown line's hideable block marker → `(marker, scale,
+/// extra)`. Indentation before the marker is preserved (nested lists/quotes);
+/// numbered markers stay visible. Setext/indented-code are decided in [`scan_md`].
+fn classify_block_md(line: &str) -> (Marker, f32, MarkSet) {
+    let indent = indent_width(line);
+    let body = &line[indent..];
+    // ATX heading (CommonMark allows up to 3 leading spaces).
+    let hashes = body.chars().take_while(|c| *c == '#').count();
+    if indent <= 3 && (1..=6).contains(&hashes) && body[hashes..].starts_with(' ') {
+        return (Marker::lead(indent + hashes + 1, ""), heading_scale(hashes), MarkSet::BOLD);
     }
-    if line.starts_with("> ") {
-        return (2, "", 1.0, MarkSet::empty());
-    }
-    for marker in ["- ", "* ", "+ "] {
-        if line.starts_with(marker) {
-            return (2, BULLET, 1.0, MarkSet::empty());
+    // Task-list items (must be checked before the plain bullet, which is a prefix).
+    for (mk, repl) in [("- [ ] ", TASK_OPEN), ("- [x] ", TASK_DONE), ("- [X] ", TASK_DONE)] {
+        if body.starts_with(mk) {
+            return (Marker { start: indent, len: mk.len(), repl }, 1.0, MarkSet::empty());
         }
     }
-    let digits = line.chars().take_while(|c| c.is_ascii_digit()).count();
-    if digits > 0 && line[digits..].starts_with(". ") {
-        // Numbered markers carry meaning; keep them visible (no projection).
-        return (0, "", 1.0, MarkSet::empty());
+    // Block quote(s): hide the whole leading `> ` run (collapses nested quotes).
+    if body.starts_with("> ") {
+        let mut len = 0;
+        while body[len..].starts_with("> ") {
+            len += 2;
+        }
+        return (Marker { start: indent, len, repl: "" }, 1.0, MarkSet::empty());
     }
-    (0, "", 1.0, MarkSet::empty())
+    // Unordered list item.
+    for marker in ["- ", "* ", "+ "] {
+        if body.starts_with(marker) {
+            return (Marker { start: indent, len: 2, repl: BULLET }, 1.0, MarkSet::empty());
+        }
+    }
+    let digits = body.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits > 0 && body[digits..].starts_with(". ") {
+        // Numbered markers carry meaning; keep them visible (no projection).
+        return (Marker::NONE, 1.0, MarkSet::empty());
+    }
+    (Marker::NONE, 1.0, MarkSet::empty())
 }
 
 /// Typst block-marker classification (Level 1). Headings use `=` runs; `- ` is an
 /// unordered list, `+ ` an enum (kept visible like Markdown's numbered lists).
-fn classify_block_typst(line: &str) -> (usize, &'static str, f32, MarkSet) {
+fn classify_block_typst(line: &str) -> (Marker, f32, MarkSet) {
     let eqs = line.chars().take_while(|c| *c == '=').count();
     if (1..=6).contains(&eqs) && line[eqs..].starts_with(' ') {
-        return (eqs + 1, "", heading_scale(eqs), MarkSet::BOLD); // "== "
+        return (Marker::lead(eqs + 1, ""), heading_scale(eqs), MarkSet::BOLD); // "== "
     }
     if line.starts_with("- ") {
-        return (2, BULLET, 1.0, MarkSet::empty());
+        return (Marker::lead(2, BULLET), 1.0, MarkSet::empty());
     }
     if line.starts_with("+ ") {
         // Typst enum marker — keep visible (carries auto-numbering meaning).
-        return (0, "", 1.0, MarkSet::empty());
+        return (Marker::NONE, 1.0, MarkSet::empty());
     }
-    (0, "", 1.0, MarkSet::empty())
+    (Marker::NONE, 1.0, MarkSet::empty())
 }
 
 /// Heading font-size multiplier by level (1 = largest).
