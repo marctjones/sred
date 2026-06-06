@@ -68,11 +68,13 @@ thread_local! {
 }
 
 /// Cache key for a prose line's styling. Includes everything its spans depend
-/// on: the text, whether it's the caret line (markers shown vs hidden), the base
-/// font size, and the host's token generation (bumped when tokens change).
-fn prose_key(line: &str, on_caret: bool, base: f32, tokens_gen: u64) -> u64 {
+/// on: the format (Markdown vs Typst projection), the text, whether it's the
+/// caret line (markers shown vs hidden), the base font size, and the host's
+/// token generation (bumped when tokens change).
+fn prose_key(format: Format, line: &str, on_caret: bool, base: f32, tokens_gen: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    (format as u8).hash(&mut h);
     line.hash(&mut h);
     on_caret.hash(&mut h);
     base.to_bits().hash(&mut h);
@@ -83,10 +85,16 @@ fn prose_key(line: &str, on_caret: bool, base: f32, tokens_gen: u64) -> u64 {
 /// Style one non-code (prose) line: project block markers (Live Preview), scan
 /// inline marks, apply token colors, and emit spans. A pure function of its
 /// inputs, so its result is safe to memoize in `STYLE_CACHE`.
-fn style_prose_line(line: &str, base: f32, on_caret: bool, tokens: &[TokenSpec]) -> (Vec<Span>, i32) {
-    let (display, delta, size, extra) = project_line(line, base, on_caret, false);
+fn style_prose_line(
+    format: Format,
+    line: &str,
+    base: f32,
+    on_caret: bool,
+    tokens: &[TokenSpec],
+) -> (Vec<Span>, i32) {
+    let (display, delta, size, extra) = project_line(format, line, base, on_caret, false);
     let chars: Vec<char> = display.chars().collect();
-    let mut charmarks = line_marks(&display);
+    let mut charmarks = line_marks(format, &display);
     for x in &mut charmarks {
         *x |= extra;
     }
@@ -125,7 +133,7 @@ fn style_prose_line(line: &str, base: f32, on_caret: bool, tokens: &[TokenSpec])
 
 pub fn styled_runs(
     text: &str,
-    _format: Format,
+    format: Format,
     base: f32,
     caret_line: usize,
     tokens: &[TokenSpec],
@@ -188,13 +196,13 @@ pub fn styled_runs(
                 });
             }
         } else {
-            // Prose lines: memoize per (text, on-caret, base, token-gen).
-            let key = prose_key(line, on_caret, base, tokens_gen);
+            // Prose lines: memoize per (format, text, on-caret, base, token-gen).
+            let key = prose_key(format, line, on_caret, base, tokens_gen);
             let (line_spans, delta) = STYLE_CACHE.with(|c| {
                 if let Some(hit) = c.borrow().get(&key) {
                     return hit.clone();
                 }
-                let computed = style_prose_line(line, base, on_caret, tokens);
+                let computed = style_prose_line(format, line, base, on_caret, tokens);
                 let mut m = c.borrow_mut();
                 if m.len() > 16384 {
                     m.clear();
@@ -222,7 +230,20 @@ pub(crate) fn clear_style_cache() {
 /// code / paragraph) the display equals the source. Otherwise leading block
 /// markers are hidden (headings/quotes) or substituted (bullets → "• "), and the
 /// returned delta is `display_leading_bytes − source_leading_bytes`.
-fn project_line(line: &str, base: f32, reveal: bool, line_is_code: bool) -> (String, i32, f32, MarkSet) {
+fn project_line(
+    format: Format,
+    line: &str,
+    base: f32,
+    reveal: bool,
+    line_is_code: bool,
+) -> (String, i32, f32, MarkSet) {
+    match format {
+        Format::Typst => project_line_typst(line, base, reveal, line_is_code),
+        _ => project_line_md(line, base, reveal, line_is_code),
+    }
+}
+
+fn project_line_md(line: &str, base: f32, reveal: bool, line_is_code: bool) -> (String, i32, f32, MarkSet) {
     if line_is_code {
         return (line.to_string(), 0, base, MarkSet::CODE);
     }
@@ -255,6 +276,45 @@ fn project_line(line: &str, base: f32, reveal: bool, line_is_code: bool) -> (Str
     (line.to_string(), 0, base, MarkSet::empty())
 }
 
+/// Typst block-marker projection (Level 1). Headings use `=` runs; `- ` is an
+/// unordered list, `+ ` an enum (kept visible like Markdown's numbered lists).
+fn project_line_typst(line: &str, base: f32, reveal: bool, line_is_code: bool) -> (String, i32, f32, MarkSet) {
+    if line_is_code {
+        return (line.to_string(), 0, base, MarkSet::CODE);
+    }
+    // Heading: one or more leading '=' then a space (level = count of '=').
+    let eqs = line.chars().take_while(|c| *c == '=').count();
+    let (size, extra) = if (1..=6).contains(&eqs) && line[eqs..].starts_with(' ') {
+        let scale = match eqs {
+            1 => 1.9,
+            2 => 1.55,
+            3 => 1.3,
+            4 => 1.15,
+            _ => 1.05,
+        };
+        (base * scale, MarkSet::BOLD)
+    } else {
+        (base, MarkSet::empty())
+    };
+    if reveal {
+        return (line.to_string(), 0, size, extra);
+    }
+    if (1..=6).contains(&eqs) && line[eqs..].starts_with(' ') {
+        let m = eqs + 1; // "== "
+        return (line[m..].to_string(), -(m as i32), size, extra);
+    }
+    const BULLET: &str = "• "; // U+2022 + space = 4 bytes
+    if let Some(rest) = line.strip_prefix("- ") {
+        let display = format!("{BULLET}{rest}");
+        return (display, BULLET.len() as i32 - 2, base, MarkSet::empty());
+    }
+    if line.strip_prefix("+ ").is_some() {
+        // Typst enum marker — keep visible (carries auto-numbering meaning).
+        return (line.to_string(), 0, base, MarkSet::empty());
+    }
+    (line.to_string(), 0, base, MarkSet::empty())
+}
+
 fn line_code_colors(
     ranges: Option<&Vec<(usize, usize, [u8; 4])>>,
     len: usize,
@@ -278,15 +338,18 @@ thread_local! {
         std::cell::RefCell::new(HashMap::new());
 }
 
-fn deco_key(line: &str) -> u64 {
+fn deco_key(format: Format, line: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    (format as u8).hash(&mut h);
     line.hash(&mut h);
     h.finish()
 }
 
 /// Strike (`~~…~~`) and underline (links) ranges in global char offsets.
-pub fn decorations(text: &str, _format: Format) -> Vec<(usize, usize, Decoration)> {
+/// (Typst markup carries neither in Level-1 projection, so this yields nothing
+/// for Typst.)
+pub fn decorations(text: &str, format: Format) -> Vec<(usize, usize, Decoration)> {
     let mut out = Vec::new();
     let mut global = 0usize;
     let mut in_fence = false;
@@ -297,14 +360,14 @@ pub fn decorations(text: &str, _format: Format) -> Vec<(usize, usize, Decoration
             in_fence = !in_fence;
         }
         if !line_is_code {
-            let key = deco_key(line);
+            let key = deco_key(format, line);
             // Cached ranges are line-relative; shift them by the line's global
             // char offset.
             let rel = DECO_CACHE.with(|c| {
                 if let Some(hit) = c.borrow().get(&key) {
                     return hit.clone();
                 }
-                let m = line_marks(line);
+                let m = line_marks(format, line);
                 let mut v = Vec::new();
                 push_runs(&m, MarkSet::STRIKE, Decoration::Strike, 0, &mut v);
                 push_runs(&m, MarkSet::LINK, Decoration::Underline, 0, &mut v);
@@ -364,20 +427,59 @@ fn heading_style(line: &str, base: f32) -> (f32, MarkSet) {
     }
 }
 
-/// Per-character marks for one line (non-nested common cases).
-fn line_marks(line: &str) -> Vec<MarkSet> {
+/// Per-character inline marks for one line, dispatched by format.
+fn line_marks(format: Format, line: &str) -> Vec<MarkSet> {
+    match format {
+        Format::Typst => line_marks_typst(line),
+        _ => line_marks_md(line),
+    }
+}
+
+/// Markdown inline marks (non-nested common cases).
+fn line_marks_md(line: &str) -> Vec<MarkSet> {
     let chars: Vec<char> = line.chars().collect();
     let n = chars.len();
     let mut marks = vec![MarkSet::empty(); n];
     let mut code = vec![false; n];
 
     // inline code `...`
+    scan_pairs_single(&chars, '`', &mut marks, &mut code, MarkSet::CODE);
+
+    apply_pair(&chars, &code, &mut marks, "**", MarkSet::BOLD);
+    apply_pair(&chars, &code, &mut marks, "~~", MarkSet::STRIKE);
+    apply_single(&chars, &code, &mut marks, '*', MarkSet::ITALIC);
+    apply_single(&chars, &code, &mut marks, '_', MarkSet::ITALIC);
+    apply_links_marks(&chars, &code, &mut marks);
+    marks
+}
+
+/// Typst inline marks (Level 1): raw `` `…` ``, math `$…$` (styled like code),
+/// strong `*…*` (single asterisk, unlike Markdown's `**`), emphasis `_…_`.
+fn line_marks_typst(line: &str) -> Vec<MarkSet> {
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+    let mut marks = vec![MarkSet::empty(); n];
+    let mut code = vec![false; n];
+
+    // Raw and math are "code-protected" so emphasis scanning ignores their guts.
+    scan_pairs_single(&chars, '`', &mut marks, &mut code, MarkSet::CODE);
+    scan_pairs_single(&chars, '$', &mut marks, &mut code, MarkSet::CODE);
+
+    apply_single(&chars, &code, &mut marks, '*', MarkSet::BOLD);
+    apply_single(&chars, &code, &mut marks, '_', MarkSet::ITALIC);
+    marks
+}
+
+/// Mark `delim … delim` pairs on one line with `bit`, protecting their contents
+/// from later emphasis scanning (`code[k] = true`). Used for `` ` `` and `$`.
+fn scan_pairs_single(chars: &[char], delim: char, marks: &mut [MarkSet], code: &mut [bool], bit: MarkSet) {
+    let n = chars.len();
     let mut i = 0;
     while i < n {
-        if chars[i] == '`' {
-            if let Some(j) = (i + 1..n).find(|&k| chars[k] == '`') {
+        if chars[i] == delim {
+            if let Some(j) = (i + 1..n).find(|&k| chars[k] == delim) {
                 for k in i..=j {
-                    marks[k].insert(MarkSet::CODE);
+                    marks[k].insert(bit);
                     code[k] = true;
                 }
                 i = j + 1;
@@ -386,13 +488,6 @@ fn line_marks(line: &str) -> Vec<MarkSet> {
         }
         i += 1;
     }
-
-    apply_pair(&chars, &code, &mut marks, "**", MarkSet::BOLD);
-    apply_pair(&chars, &code, &mut marks, "~~", MarkSet::STRIKE);
-    apply_single(&chars, &code, &mut marks, '*', MarkSet::ITALIC);
-    apply_single(&chars, &code, &mut marks, '_', MarkSet::ITALIC);
-    apply_links_marks(&chars, &code, &mut marks);
-    marks
 }
 
 fn slice_eq(chars: &[char], at: usize, pat: &str) -> bool {

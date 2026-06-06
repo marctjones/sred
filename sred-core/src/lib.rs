@@ -186,6 +186,43 @@ mod tests {
     }
 
     #[test]
+    fn typst_live_preview_projects_markup() {
+        // Typst headings use '=' (level = count); '- ' is a bullet.
+        let src = "para\n= Heading\n- item";
+        let (spans, deltas) = view::styled_runs(src, Format::Typst, 16.0, 0, &[], 0); // caret line 0
+        let display: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert!(display.contains("Heading"));
+        assert!(
+            !display.contains("= Heading"),
+            "typst heading marker should hide off the caret line: {display:?}"
+        );
+        assert!(display.contains("• item"), "typst '- ' should become a bullet: {display:?}");
+        assert_eq!(deltas[1], -2, "hidden '= ' → delta -2");
+        assert_eq!(deltas[2], 2, "'- ' → '• ' → delta +2");
+    }
+
+    #[test]
+    fn typst_inline_marks_bold_italic_math() {
+        // On the caret line (markers shown): *strong*, _emph_, $math$.
+        let (spans, _) = view::styled_runs("see *b* _i_ $x^2$", Format::Typst, 16.0, 0, &[], 0);
+        assert!(spans.iter().any(|s| s.marks.contains(MarkSet::BOLD)), "typst *…* is bold");
+        assert!(spans.iter().any(|s| s.marks.contains(MarkSet::ITALIC)), "typst _…_ is italic");
+        assert!(spans.iter().any(|s| s.marks.contains(MarkSet::CODE)), "typst $…$ styled like code");
+    }
+
+    #[test]
+    fn typst_and_markdown_differ_on_single_asterisk() {
+        // Same source, format-dependent: '*x*' is STRONG in Typst, EMPHASIS in
+        // Markdown. This is why the styling cache key must include the format.
+        let (ts, _) = view::styled_runs("*x*", Format::Typst, 16.0, 0, &[], 0);
+        let (md, _) = view::styled_runs("*x*", Format::Markdown, 16.0, 0, &[], 0);
+        let ts_x = ts.iter().find(|s| s.text.contains('x')).unwrap();
+        let md_x = md.iter().find(|s| s.text.contains('x')).unwrap();
+        assert!(ts_x.marks.contains(MarkSet::BOLD) && !ts_x.marks.contains(MarkSet::ITALIC));
+        assert!(md_x.marks.contains(MarkSet::ITALIC) && !md_x.marks.contains(MarkSet::BOLD));
+    }
+
+    #[test]
     fn tokens_color_matched_chars() {
         let spec = view::TokenSpec {
             id: "x".into(),
