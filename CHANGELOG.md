@@ -3,6 +3,29 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.0-alpha.1] — 2026-06-06
+
+### Added — rendered math/figure fragment architecture (#15, partial)
+
+The component-level building blocks for rendered Typst math/figures (the heavy
+compiler + true inline interleaving remain a follow-up):
+
+- **Fragment detection**: `view::math_fragments(text, format)` →
+  `Vec<MathFragment>` (char range + delimited source + display flag). Markdown
+  `$…$`/`$$…$$` via pulldown's math extension; Typst `$…$` equations via the
+  syntax tree (block flag from the grammar). `Editor::math_fragments()`.
+- **Host renderer hook + cache**: `Editor::set_fragment_renderer(cb)` where the
+  host compiles `(src, display, font_size)` → `FragmentImage` (RGBA); results are
+  cached by `(src, display, font_size)`. `Editor::render_fragment(frag)`.
+
+sred deliberately does **not** bundle the Typst compiler. Remaining (tracked as a
+follow-up on #15): overlay positioning geometry (`rect_for_range`) and true inline
+interleaving of rendered fragments into the cosmic-text layout.
+
+### Tests
+- `tests/fragments.rs` (5): markdown + typst inline/display detection, char-index
+  ranges, renderer call + caching, none-without-renderer.
+
 ## [0.6.0] — 2026-06-06
 
 **Milestone: power editing & conveniences.**

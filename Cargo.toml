@@ -3,7 +3,7 @@ resolver = "2"
 members = ["sred-core", "sred-slint", "sred-demo", "sred-egui"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0-alpha.1"
 edition = "2021"
 license = "GPL-3.0-only"
 

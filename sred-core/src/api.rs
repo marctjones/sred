@@ -55,6 +55,19 @@ pub struct Editor {
     /// Find/replace match highlights (display char ranges) + the current match.
     search_hits: Vec<(usize, usize)>,
     search_current: Option<usize>,
+    /// Host renderer for math fragments (`src`, `display`, `font_size`) → image,
+    /// plus a cache so an unchanged fragment isn't recompiled.
+    fragment_renderer: Option<Box<dyn Fn(&str, bool, f32) -> Option<FragmentImage>>>,
+    fragment_cache: std::collections::HashMap<(String, bool, u32), Option<FragmentImage>>,
+}
+
+/// An RGBA image a host renders for a math/figure fragment (e.g. via the Typst
+/// engine), to overlay on the editor at the fragment's position.
+#[derive(Clone)]
+pub struct FragmentImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
 }
 
 /// Globally-unique generation source for token sets, so caches can't confuse two
@@ -80,6 +93,8 @@ impl Editor {
             spell_cache: None,
             search_hits: Vec::new(),
             search_current: None,
+            fragment_renderer: None,
+            fragment_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -383,6 +398,44 @@ impl Editor {
         let text = self.core.text();
         let word: String = text.chars().skip(s).take(e - s).collect();
         Some((s..e, word))
+    }
+
+    // ---- rendered fragments (math / figures) -------------------------------
+
+    /// Register a host renderer that compiles a math/figure fragment (`src`,
+    /// `display`, `font_size`) to an RGBA image (e.g. via the Typst engine). The
+    /// editor caches results by `(src, display, font_size)`, so a host can call
+    /// [`render_fragment`](Self::render_fragment) every frame cheaply.
+    ///
+    /// sred does not bundle a compiler; the host (or a future feature crate)
+    /// supplies it. Positioning the overlay (and true inline interleaving into the
+    /// text layout) is the remaining follow-up — for now the host overlays the
+    /// image at the fragment's range using its own geometry.
+    pub fn set_fragment_renderer(
+        &mut self,
+        renderer: Box<dyn Fn(&str, bool, f32) -> Option<FragmentImage>>,
+    ) {
+        self.fragment_renderer = Some(renderer);
+        self.fragment_cache.clear();
+    }
+
+    /// Math fragments in the current document (char ranges + delimited source +
+    /// display flag), for a host to render and overlay.
+    pub fn math_fragments(&self) -> Vec<crate::view::MathFragment> {
+        crate::view::math_fragments(&self.core.text(), self.core.format())
+    }
+
+    /// Render one fragment to an image via the registered renderer (cached).
+    /// Returns `None` if no renderer is set or it declined the fragment.
+    pub fn render_fragment(&mut self, frag: &crate::view::MathFragment) -> Option<FragmentImage> {
+        let renderer = self.fragment_renderer.as_ref()?;
+        let key = (frag.src.clone(), frag.display, self.theme.font_size.to_bits());
+        if let Some(hit) = self.fragment_cache.get(&key) {
+            return hit.clone();
+        }
+        let img = renderer(&frag.src, frag.display, self.theme.font_size);
+        self.fragment_cache.insert(key, img.clone());
+        img
     }
 
     /// Misspelling squiggle + search-highlight decorations for the current text.

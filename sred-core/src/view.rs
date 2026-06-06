@@ -961,6 +961,80 @@ pub fn link_at(text: &str, cursor: usize) -> Option<(Range<usize>, String)> {
     None
 }
 
+// ---- math fragments (rendered-fragment architecture, #15) ------------------
+
+/// A math span detected in the source: its char range, the delimited source
+/// (`$…$` / `$$…$$`), and whether it is display (block) math. A host renders it
+/// to an image via [`crate::Editor::set_fragment_renderer`] and overlays it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MathFragment {
+    pub start: usize,
+    pub end: usize,
+    pub src: String,
+    pub display: bool,
+}
+
+/// Detect math fragments in the document (Markdown `$…$`/`$$…$$` via the parser's
+/// math extension; Typst `$…$` equations via the syntax tree, with the block flag
+/// from the grammar). Char ranges, left to right.
+pub fn math_fragments(text: &str, format: Format) -> Vec<MathFragment> {
+    match format {
+        Format::Typst => math_fragments_typst(text),
+        _ => math_fragments_md(text),
+    }
+}
+
+fn byte_to_char(text: &str, byte: usize) -> usize {
+    text[..byte.min(text.len())].chars().count()
+}
+
+fn math_fragments_md(text: &str) -> Vec<MathFragment> {
+    use pulldown_cmark::{Event, Options, Parser};
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_MATH);
+    let mut out = Vec::new();
+    for (ev, r) in Parser::new_ext(text, opts).into_offset_iter() {
+        let display = match ev {
+            Event::InlineMath(_) => false,
+            Event::DisplayMath(_) => true,
+            _ => continue,
+        };
+        out.push(MathFragment {
+            start: byte_to_char(text, r.start),
+            end: byte_to_char(text, r.end),
+            src: text[r.clone()].to_string(),
+            display,
+        });
+    }
+    out
+}
+
+fn math_fragments_typst(text: &str) -> Vec<MathFragment> {
+    use typst_syntax::{ast, parse, SyntaxKind, SyntaxNode};
+    fn walk(node: &SyntaxNode, off: usize, text: &str, out: &mut Vec<MathFragment>) {
+        if node.kind() == SyntaxKind::Equation {
+            let display = node.cast::<ast::Equation>().map(|e| e.block()).unwrap_or(false);
+            let end = off + node.len();
+            out.push(MathFragment {
+                start: byte_to_char(text, off),
+                end: byte_to_char(text, end),
+                src: text[off..end.min(text.len())].to_string(),
+                display,
+            });
+            return; // don't descend into nested equation tokens
+        }
+        let mut child_off = off;
+        for child in node.children() {
+            walk(child, child_off, text, out);
+            child_off += child.len();
+        }
+    }
+    let root = parse(text);
+    let mut out = Vec::new();
+    walk(&root, 0, text, &mut out);
+    out
+}
+
 // ---- inline scanner --------------------------------------------------------
 
 /// Per-character inline marks for one line, dispatched by format.
