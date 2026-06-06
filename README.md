@@ -106,8 +106,13 @@ manual via `cargo run -p sred-demo`.
       buffer + line-splice + viewport-bounded raster + per-line styling cache
 - [x] **Live Preview + viewport rendering** — markers hidden off-caret; viewport-sized
       frames via `render_view`
-- [ ] **0.3.0** — full CommonMark (`pulldown-cmark`) + full Typst (`typst-syntax`)
-      styling; rich link/image/math editing; IME / accessibility
+- [x] **0.3.0** — full CommonMark (`pulldown-cmark`) + full Typst (`typst-syntax`)
+      styling, inline + block-level, with per-token syntax colors
+- [x] **0.4.0** — editing parity: word/document motion + word-delete, portable
+      clipboard contract, host font family, triple-click/drag-drop/page, HTML blocks
+- [ ] **0.5.0** — accessibility (AccessKit) + IME/preedit + a non-Slint (egui) adapter
+- [ ] **0.6.0** — find/replace, multiple cursors, auto-pairs, spellcheck hooks
+      ([milestones](https://github.com/marctjones/sred/milestones))
 
 ## Embedding (the reusable surface)
 

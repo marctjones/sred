@@ -106,23 +106,23 @@ fn apply_core_command(core: &mut EditorCore, name: &str) -> bool {
 fn run_named(c: &mut Controller, name: &str) -> bool {
     match name {
         "copy" => {
-            let t = c.core.selected_text();
+            // Portable core clipboard contract; host owns the system clipboard.
+            let t = c.core.copy();
             if !t.is_empty() {
                 c.clip_set(t);
             }
             true
         }
         "cut" => {
-            let t = c.core.selected_text();
+            let t = c.core.cut();
             if !t.is_empty() {
                 c.clip_set(t);
-                c.core.apply(Command::DeleteSelection);
             }
             true
         }
         "paste" => {
             if let Some(t) = c.clip_get() {
-                c.core.apply(Command::Insert(t));
+                c.core.paste(&t);
             }
             true
         }

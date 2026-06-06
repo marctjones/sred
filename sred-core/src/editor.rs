@@ -24,6 +24,14 @@ pub enum Motion {
     Down,
     LineStart,
     LineEnd,
+    /// Previous word boundary (Ctrl+Left).
+    WordLeft,
+    /// Next word boundary (Ctrl+Right).
+    WordRight,
+    /// Start of the document (Ctrl+Home).
+    DocStart,
+    /// End of the document (Ctrl+End).
+    DocEnd,
 }
 
 /// Paragraph-level kind, used by `SetBlock`/`ToggleBlock` to choose which marker
@@ -45,6 +53,10 @@ pub enum Command {
     DeleteBackward,
     DeleteForward,
     DeleteSelection,
+    /// Delete from the caret to the previous word boundary (Ctrl+Backspace).
+    DeleteWordBackward,
+    /// Delete from the caret to the next word boundary (Ctrl+Delete).
+    DeleteWordForward,
     Move(Motion),
     Select(Motion),
     SelectAll,
@@ -178,6 +190,61 @@ impl EditorCore {
         self.cursor = e;
     }
 
+    /// Select the whole line containing `idx` (including its trailing newline, so
+    /// paste reinserts a clean line). Used by triple-click.
+    pub fn select_line_at(&mut self, idx: usize) {
+        let line = self.rope.char_to_line(idx.min(self.len()));
+        let s = self.rope.line_to_char(line);
+        let e = self.rope.line_to_char((line + 1).min(self.rope.len_lines())).min(self.len());
+        self.anchor = Some(s);
+        self.cursor = e;
+        self.last_kind = EditKind::None;
+    }
+
+    // ---- clipboard contract (portable; host owns the system clipboard) -------
+
+    /// The selected source text (empty if no selection) — what a host puts on the
+    /// clipboard for Copy.
+    pub fn copy(&self) -> String {
+        self.selected_text()
+    }
+
+    /// Like [`copy`](Self::copy) but also deletes the selection — for Cut.
+    pub fn cut(&mut self) -> String {
+        let text = self.selected_text();
+        if !text.is_empty() {
+            self.checkpoint(EditKind::Delete);
+            self.delete_selection();
+        }
+        text
+    }
+
+    /// Insert clipboard text at the caret (replacing any selection) — for Paste.
+    pub fn paste(&mut self, text: &str) {
+        self.checkpoint(EditKind::InsertBoundary);
+        self.insert(text);
+    }
+
+    /// Move the current selection's text to `target` (drag-and-drop). No-op
+    /// without a selection or when the target is inside the selection.
+    pub fn move_selection_to(&mut self, target: usize) {
+        let Some((s, e)) = self.selection_range() else {
+            return;
+        };
+        if target >= s && target <= e {
+            return; // dropping inside the selection: nothing to do
+        }
+        let moved = self.rope.slice(s..e).to_string();
+        self.checkpoint(EditKind::Structure);
+        // Remove the source span first, then adjust the insert point if it sat
+        // after the removed region.
+        self.rope.remove(s..e);
+        let dst = if target > e { target - (e - s) } else { target };
+        self.rope.insert(dst, &moved);
+        self.anchor = Some(dst);
+        self.cursor = dst + moved.chars().count();
+    }
+
     // ---- styling/decoration views (delegated to the view builder) ----------
 
     /// Source line index of the caret.
@@ -239,6 +306,21 @@ impl EditorCore {
             Command::DeleteSelection => {
                 self.checkpoint(EditKind::Delete);
                 self.delete_selection();
+            }
+            Command::DeleteWordBackward => {
+                self.checkpoint(EditKind::Delete);
+                if !self.delete_selection() && self.cursor > 0 {
+                    let to = self.word_left(self.cursor);
+                    self.rope.remove(to..self.cursor);
+                    self.cursor = to;
+                }
+            }
+            Command::DeleteWordForward => {
+                self.checkpoint(EditKind::Delete);
+                if !self.delete_selection() && self.cursor < self.len() {
+                    let to = self.word_right(self.cursor);
+                    self.rope.remove(self.cursor..to);
+                }
             }
             Command::Move(m) => {
                 self.anchor = None;
@@ -492,8 +574,39 @@ impl EditorCore {
                 }
                 end.max(self.rope.line_to_char(line))
             }
+            Motion::WordLeft => self.word_left(self.cursor),
+            Motion::WordRight => self.word_right(self.cursor),
+            Motion::DocStart => 0,
+            Motion::DocEnd => self.len(),
             Motion::Up | Motion::Down => self.cursor, // resolved by layout in the controller
         }
+    }
+
+    /// Previous word boundary: skip separators left, then the word run left.
+    fn word_left(&self, idx: usize) -> usize {
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let mut j = idx.min(self.len());
+        while j > 0 && !is_word(self.rope.char(j - 1)) {
+            j -= 1;
+        }
+        while j > 0 && is_word(self.rope.char(j - 1)) {
+            j -= 1;
+        }
+        j
+    }
+
+    /// Next word boundary: skip separators right, then the word run right.
+    fn word_right(&self, idx: usize) -> usize {
+        let n = self.len();
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let mut j = idx.min(n);
+        while j < n && !is_word(self.rope.char(j)) {
+            j += 1;
+        }
+        while j < n && is_word(self.rope.char(j)) {
+            j += 1;
+        }
+        j
     }
 
     // ---- undo / redo -------------------------------------------------------

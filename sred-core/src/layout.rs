@@ -37,6 +37,11 @@ pub struct Theme {
     pub syn_string: [u8; 4],
     pub syn_comment: [u8; 4],
     pub syn_operator: [u8; 4],
+    /// Body font family. `None` ⇒ cosmic-text's default sans. The named family
+    /// must be loaded into the renderer's `FontSystem` (host responsibility).
+    pub font_family: Option<String>,
+    /// Monospace/code font family. `None` ⇒ the generic monospace family.
+    pub code_font_family: Option<String>,
 }
 
 impl Default for Theme {
@@ -57,6 +62,8 @@ impl Default for Theme {
             syn_string: [3, 47, 98, 255],
             syn_comment: [150, 152, 150, 255],
             syn_operator: [80, 60, 130, 255],
+            font_family: None,
+            code_font_family: None,
         }
     }
 }
@@ -133,7 +140,7 @@ impl TextRenderer {
         let shaping_w = (full_width - 2.0 * theme.margin_x).max(16.0);
         buffer.set_size(&mut self.font_system, Some(shaping_w), None);
 
-        let default_attrs = Attrs::new();
+        let default_attrs = base_attrs(theme);
         let rich: Vec<(&str, Attrs)> = spans
             .iter()
             .map(|s| {
@@ -691,8 +698,17 @@ fn render_cursor_to_flat(text: &str, deltas: &[i32], cursor: Cursor) -> usize {
 
 // ---- raster helpers --------------------------------------------------------
 
-fn attrs_for(marks: MarkSet, color: Option<[u8; 4]>, theme: &Theme) -> Attrs<'static> {
+/// The base attributes for unstyled text: the host body font family if set.
+fn base_attrs(theme: &Theme) -> Attrs<'_> {
     let mut a = Attrs::new();
+    if let Some(f) = &theme.font_family {
+        a = a.family(Family::Name(f));
+    }
+    a
+}
+
+fn attrs_for<'a>(marks: MarkSet, color: Option<[u8; 4]>, theme: &'a Theme) -> Attrs<'a> {
+    let mut a = base_attrs(theme);
     if marks.contains(MarkSet::BOLD) {
         a = a.weight(Weight::BOLD);
     }
@@ -700,7 +716,13 @@ fn attrs_for(marks: MarkSet, color: Option<[u8; 4]>, theme: &Theme) -> Attrs<'st
         a = a.style(Style::Italic);
     }
     if marks.contains(MarkSet::CODE) {
-        a = a.family(Family::Monospace);
+        a = a.family(
+            theme
+                .code_font_family
+                .as_deref()
+                .map(Family::Name)
+                .unwrap_or(Family::Monospace),
+        );
         a = a.color(rgba(theme.code));
     }
     if marks.contains(MarkSet::LINK) {
@@ -792,7 +814,7 @@ fn visible_source_range(vis: &[cosmic_text::LayoutRun], text: &str, deltas: &[i3
 /// exactly what `set_rich_text` would produce for it (same text + AttrsList +
 /// metrics + line ending) so layout/caret/hit geometry are unaffected.
 fn make_buffer_line(lp: &LineParts, theme: &Theme) -> BufferLine {
-    let default_attrs = Attrs::new();
+    let default_attrs = base_attrs(theme);
     let mut text = String::new();
     let mut attrs_list = AttrsList::new(&default_attrs);
     for &(t, marks, color, size) in &lp.runs {
@@ -814,6 +836,8 @@ fn theme_key(theme: &Theme, shaping_w: f32) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     theme.font_size.to_bits().hash(&mut h);
     theme.line_height.to_bits().hash(&mut h);
+    theme.font_family.hash(&mut h);
+    theme.code_font_family.hash(&mut h);
     shaping_w.to_bits().hash(&mut h);
     h.finish()
 }

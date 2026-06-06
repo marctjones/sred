@@ -240,6 +240,16 @@ impl Editor {
         let idx = self.hit(x, y);
         self.core.select_word_at(idx);
     }
+    /// Triple-click selects the whole line/paragraph under the pointer.
+    pub fn triple_click(&mut self, x: f32, y: f32) {
+        let idx = self.hit(x, y);
+        self.core.select_line_at(idx);
+    }
+    /// Drop the current selection's text at the pointer (drag-and-drop move).
+    pub fn drop_selection_at(&mut self, x: f32, y: f32) {
+        let idx = self.hit(x, y);
+        self.core.move_selection_to(idx);
+    }
 
     /// Vertical caret motion (Up/Down) — uses layout to find the column.
     pub fn move_vertical(&mut self, down: bool) {
@@ -250,6 +260,31 @@ impl Editor {
             self.renderer
                 .vertical(&spans, &text, &deltas, self.width, &self.theme, cur, down);
         self.core.set_cursor(idx);
+    }
+
+    /// Page up/down: move the caret by ~one viewport of lines (and let the next
+    /// render's caret-follow scroll to it).
+    pub fn page(&mut self, down: bool) {
+        let rows = (self.viewport_h / self.theme.line_height).floor().max(1.0) as usize;
+        // One row of overlap for context, like most editors.
+        for _ in 0..rows.saturating_sub(1).max(1) {
+            self.move_vertical(down);
+        }
+    }
+
+    // ---- clipboard (host owns the system clipboard; these are the hooks) ------
+
+    /// Selected text for Copy (empty if no selection).
+    pub fn copy(&self) -> String {
+        self.core.copy()
+    }
+    /// Selected text for Cut; also deletes the selection.
+    pub fn cut(&mut self) -> String {
+        self.core.cut()
+    }
+    /// Insert clipboard text at the caret (replaces any selection).
+    pub fn paste(&mut self, text: &str) {
+        self.core.paste(text);
     }
 
     // ---- scrolling ---------------------------------------------------------

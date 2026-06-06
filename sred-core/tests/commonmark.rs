@@ -157,6 +157,18 @@ fn nested_blockquote_collapses_markers() {
 }
 
 #[test]
+fn html_block_is_styled_as_code() {
+    let src = "para\n\n<div class=\"x\">\n  <p>hi</p>\n</div>\n\nback\n";
+    let (disp, deltas, spans) = render(src, 0);
+    assert_eq!(disp[2], "<div class=\"x\">", "HTML block kept verbatim");
+    assert_eq!(deltas[2], 0, "HTML block has no marker \u{2192} delta 0");
+    assert!(
+        marks_of(&spans, "<div").contains(MarkSet::CODE),
+        "HTML block line should carry the CODE mark"
+    );
+}
+
+#[test]
 fn block_constructs_round_trip_byte_lossless() {
     // The caret line always shows its source verbatim, so the full document is
     // recoverable by visiting every line as the caret line.

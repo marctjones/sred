@@ -495,7 +495,8 @@ struct MdLineFacts {
     setext_level: Option<u8>,
     /// This line is a setext `===`/`---` underline (hidden off-caret).
     setext_underline: bool,
-    /// This line sits inside a 4-space/tab indented code block.
+    /// This line renders as code (indented code block or raw HTML block): CODE
+    /// mark, no marker hiding, source kept verbatim.
     indented_code: bool,
 }
 
@@ -582,7 +583,9 @@ fn scan_md(text: &str, lines: &[&str], is_fence: &[bool], interior: &[bool]) -> 
                     }
                 }
             }
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)) => {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)) | Event::Start(Tag::HtmlBlock) => {
+                // Indented code and raw HTML blocks both render as code (source
+                // kept, no marker hiding → delta 0).
                 let l0 = line_of(r.start);
                 let hi = line_of(r.end.saturating_sub(1)).min(lines.len().saturating_sub(1));
                 for f in &mut facts[l0..=hi] {

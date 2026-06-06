@@ -3,6 +3,33 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.4.0] — 2026-06-06
+
+**Milestone: editing parity & quick wins.** Rounds out the everyday editing
+surface and finishes CommonMark block coverage, on the way to a general-purpose
+editor component. All edits stay byte-lossless.
+
+### Added
+- **Word & document motion** (#6): `Motion::WordLeft/WordRight/DocStart/DocEnd`
+  plus `Command::DeleteWordBackward/DeleteWordForward` (Ctrl+←/→, Ctrl+Home/End,
+  Ctrl+Backspace/Delete). Char-class word boundaries; Unicode-aware.
+- **Portable clipboard contract** (#7): `Editor`/`EditorCore` gain
+  `copy()`/`cut()`/`paste()` so any host (not just Slint) gets copy/cut/paste
+  for free. `sred-slint` now dispatches through it.
+- **Host-selectable font family** (#8): `Theme.font_family` / `code_font_family`
+  → cosmic-text `Family::Name`; folded into the layout cache key so a font change
+  invalidates correctly. (Custom fonts are loaded into the host `FontSystem`.)
+- **Pointer & selection polish** (#10): triple-click line/paragraph selection
+  (`triple_click`), drag-and-drop move of a selection (`drop_selection_at` /
+  `EditorCore::move_selection_to`), and `page(down)` (PageUp/PageDown).
+- **CommonMark HTML blocks** (#14): raw HTML blocks render as code (source kept,
+  delta 0), via the existing whole-document `scan_md` pass.
+
+### Tests
+- `tests/editing_v04.rs` (8): word/doc motion, word-delete, clipboard round-trip,
+  line selection, drag-drop move, Unicode word motion.
+- `tests/commonmark.rs`: + HTML-block case.
+
 ## [0.3.0] — 2026-06-06
 
 **Milestone: parser-driven styling, inline *and* block-level.** Rolls up the
