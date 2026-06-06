@@ -47,22 +47,26 @@ path. Everything the user doesn't need *this instant* gets deferred:
 This alone likely makes short/medium notes feel snappy, and it's a small,
 test-gateable change.
 
-### Tier 2 — viewport-bounded rendering  *(the throughput fix for long notes; do carefully)*
-Shape + rasterize + upload **only the visible slice**, not the whole document, so
-per-keystroke cost is **flat regardless of note length**.
+### Tier 2 — viewport-bounded rendering  *(the throughput fix for long notes)* — **DONE**
+Rasterize + alloc + upload **only the visible slice**, not the whole document, so
+per-keystroke allocation and GPU upload are **flat regardless of note length**.
 
-- cosmic-text supports it directly: `set_size(_, Some(viewport_h))` +
-  `set_scroll(top_line)` + `shape_until_scroll` shapes only visible lines; the
-  frame becomes viewport-sized (small, cheap to upload).
-- **This is the change that broke before** (blank render / "text didn't show").
-  Redo it **test-first**, gated by:
-  1. a headless test that types a character and asserts the rendered frame
-     **actually changed in the visible region** (catches blank-render), and
-  2. a scaling test asserting per-keystroke render time does **not** grow with
-     document length.
-- It changes the frame contract (viewport-sized) → touches sred's facade **and**
-  Noet's display (Noet currently shows a full-doc image in a `Flickable`). Plan
-  both sides together.
+- Shipped as `TextRenderer::render_viewport` + `Editor::render_view` (sred,
+  v0.2.0-alpha.4) and the Noet display switch (viewport-sized image at a fixed
+  position; pointer coords add `scroll-y` to reach document space; scroll drives
+  a host re-render of the new slice).
+- **Deliberately conservative on the part that broke before:** the buffer is
+  still shaped in full (so caret/hit/geometry are byte-identical to the full-doc
+  path) and we *avoid cosmic-text's `set_scroll` API* — only rasterization is
+  bounded. This sidesteps the blank-render class entirely. Folding caret-follow
+  into the same shaping pass guarantees the rasterized slice always matches the
+  resolved scroll (typing at the bottom can't paint a stale frame).
+- **Test-gated** against the prior regression: headless tests assert the visible
+  frame has ink at the top, *changes* when a character is typed, is the *same
+  size* for a 10-line and a 4000-line doc, and maps scroll + caret correctly.
+- *Not yet done (future):* bounding the **shaping** too (persistent `Buffer` with
+  per-line shape cache, or cosmic-text scroll-shaping) would also make shaping
+  flat in doc length; today shaping is still O(doc) while alloc/upload are flat.
 
 ### Tier 3 — incremental polish  *(after Tiers 1–2)*
 - **Cache syntect** highlights per code-block by content hash (only re-highlight

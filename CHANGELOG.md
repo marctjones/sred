@@ -3,6 +3,26 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.2.0-alpha.4] — 2026-06-06
+
+### Performance
+- **Viewport-bounded rendering** (Tier 2) — new `TextRenderer::render_viewport`
+  and `Editor::render_view(follow)` rasterize only the visible slice into a
+  **viewport-sized** frame, so per-keystroke allocation and GPU upload are flat
+  regardless of document length (the throughput fix for long notes). The buffer
+  is still shaped in full (caret/hit/geometry unchanged) and cosmic-text's scroll
+  API is avoided, so the blank-render class that bit the earlier attempt can't
+  recur. Caret-follow is folded into the same shaping pass — the rasterized slice
+  always matches the resolved scroll.
+- New `ViewOut` type (frame + viewport-relative caret + resolved `scroll_y` +
+  full `doc_height`). `render()`/`RenderOut` are unchanged; full-doc hosts keep
+  working and opt into the viewport path via `render_view`.
+- Test-gated: `viewport_render_{shows_content_at_top,reflects_edits_in_view,
+  cost_is_flat_in_doc_length,scrolls_to_show_lower_content,caret_is_viewport_relative}`.
+
+### Added
+- Re-export `RenderOut` and `ViewOut` from the crate root.
+
 ## [0.2.0-alpha.3] — 2026-06-06
 
 ### Performance
@@ -73,3 +93,4 @@ model with reconstructive save (superseded by the 0.2 source-anchored core).
 [0.1.0]: https://github.com/marctjones/sred/releases/tag/v0.1.0
 [0.2.0-alpha.2]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.2
 [0.2.0-alpha.3]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.3
+[0.2.0-alpha.4]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.4
