@@ -58,77 +58,259 @@ pub struct TokenSpec {
     pub matcher: Box<dyn Fn(&str) -> Vec<TokenMatch>>,
 }
 
+// ---- doc-level analysis (caret-INDEPENDENT) -------------------------------
+//
+// Phase 2 splits styling into a caret-independent `analyze()` (one whole-document
+// parse, cacheable by text) and a cheap caret-dependent `project()` per line.
+// The expensive parse therefore does NOT re-run on a caret move (a very common
+// event); only the projection of the two lines whose caret-state flipped does.
+// The byte-delta — the fidelity/cursor-mapping invariant — is produced entirely
+// in `project()` from the marker byte range that `analyze()` records, so it stays
+// correct by construction.
+
+/// Caret-independent per-line facts produced by [`analyze`]. Everything a full
+/// parse determines that does NOT depend on where the caret is.
+#[derive(Clone)]
+struct LineInfo {
+    /// Leading SOURCE bytes that form the hideable block marker (`"## "`, `"- "`,
+    /// `"> "`, or the whole ```` ``` ```` fence line). Replaced by `repl` when the
+    /// line is projected off-caret; shown verbatim on the caret line. `0` ⇒ no
+    /// hideable marker (paragraphs, numbered lists, code interiors).
+    marker_len: usize,
+    /// What the hidden marker is replaced by: `""` to drop it, `"• "` for bullets.
+    repl: &'static str,
+    /// Whole-line font-size multiplier (headings scale up); `1.0` otherwise. Kept
+    /// base-independent so the analysis cache survives a font-size change.
+    scale: f32,
+    /// Marks applied to every char of the line (heading `BOLD`; code `CODE`).
+    extra: MarkSet,
+    /// Code line (fence delimiter or interior): colors come from the syntax
+    /// highlighter, inline markup isn't parsed, and host tokens aren't matched.
+    is_code: bool,
+    /// Per-SOURCE-char inline marks (markup-parser output). `CODE`-only for code.
+    inline: Vec<MarkSet>,
+    /// Per-SOURCE-char colors (syntect for code; syntax palette for prose in
+    /// Step D). `None` where uncolored.
+    colors: Vec<Option<[u8; 4]>>,
+    /// Hash of all of the above + the source text: the [`project`] cache seed.
+    /// Captures every cross-line dependency (fence state, future setext/refs) so
+    /// a per-line project cache stays correct even when a line's rendering depends
+    /// on its neighbors.
+    digest: u64,
+}
+
+impl LineInfo {
+    fn new(
+        line: &str,
+        marker_len: usize,
+        repl: &'static str,
+        scale: f32,
+        extra: MarkSet,
+        is_code: bool,
+        inline: Vec<MarkSet>,
+        colors: Vec<Option<[u8; 4]>>,
+    ) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        line.hash(&mut h);
+        marker_len.hash(&mut h);
+        repl.hash(&mut h);
+        scale.to_bits().hash(&mut h);
+        extra.bits().hash(&mut h);
+        is_code.hash(&mut h);
+        for m in &inline {
+            m.bits().hash(&mut h);
+        }
+        for c in &colors {
+            c.hash(&mut h);
+        }
+        let digest = h.finish();
+        LineInfo { marker_len, repl, scale, extra, is_code, inline, colors, digest }
+    }
+}
+
+/// Whole-document analysis: one [`LineInfo`] per source line.
+struct DocAnalysis {
+    lines: Vec<LineInfo>,
+}
+
 thread_local! {
-    // Per-prose-line styled spans + delta, keyed by `prose_key`. Lets a keystroke
-    // re-style only the line(s) that changed instead of re-scanning the whole
-    // document. Code lines are never cached (their highlight colors depend on
-    // block context). Bounded; cleared wholesale when large.
-    static STYLE_CACHE: std::cell::RefCell<HashMap<u64, (Vec<Span>, i32)>> =
+    // Whole-document analysis, keyed by (format, text). A content edit misses and
+    // re-parses (~1–2 ms for a 4000-line doc); a caret move is a pure cache hit.
+    static ANALYSIS_CACHE: std::cell::RefCell<HashMap<u64, std::rc::Rc<DocAnalysis>>> =
+        std::cell::RefCell::new(HashMap::new());
+    // Per-line projected spans + delta, keyed by `project_key`. A line's
+    // projection is a pure function of its `LineInfo`, caret-state, base size and
+    // token generation, so a caret move only reprojects the two lines whose
+    // caret-state flipped. Bounded; cleared wholesale when large.
+    static PROJECT_CACHE: std::cell::RefCell<HashMap<u64, (Vec<Span>, i32)>> =
         std::cell::RefCell::new(HashMap::new());
 }
 
-/// Cache key for a prose line's styling. Includes everything its spans depend
-/// on: the format (Markdown vs Typst projection), the text, whether it's the
-/// caret line (markers shown vs hidden), the base font size, and the host's
-/// token generation (bumped when tokens change).
-fn prose_key(format: Format, line: &str, on_caret: bool, base: f32, tokens_gen: u64) -> u64 {
+fn analysis_key(format: Format, text: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (format as u8).hash(&mut h);
-    line.hash(&mut h);
+    text.hash(&mut h);
+    h.finish()
+}
+
+/// Cache key for one line's projection: its analysis `digest` (which already
+/// folds in the source text + every cross-line dependency) plus the caret-state,
+/// base font size and token generation that `project` also reads.
+fn project_key(digest: u64, on_caret: bool, base: f32, tokens_gen: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    digest.hash(&mut h);
     on_caret.hash(&mut h);
     base.to_bits().hash(&mut h);
     tokens_gen.hash(&mut h);
     h.finish()
 }
 
-/// Style one non-code (prose) line: project block markers (Live Preview), scan
-/// inline marks, apply token colors, and emit spans. A pure function of its
-/// inputs, so its result is safe to memoize in `STYLE_CACHE`.
-fn style_prose_line(
-    format: Format,
-    line: &str,
-    base: f32,
-    on_caret: bool,
-    tokens: &[TokenSpec],
-) -> (Vec<Span>, i32) {
-    let (display, delta, size, extra) = project_line(format, line, base, on_caret, false);
-    let chars: Vec<char> = display.chars().collect();
-    let mut charmarks = line_marks(format, &display);
-    for x in &mut charmarks {
-        *x |= extra;
+fn analyze_cached(text: &str, format: Format) -> std::rc::Rc<DocAnalysis> {
+    let key = analysis_key(format, text);
+    ANALYSIS_CACHE.with(|c| {
+        if let Some(hit) = c.borrow().get(&key) {
+            return hit.clone();
+        }
+        let computed = std::rc::Rc::new(analyze(text, format));
+        let mut m = c.borrow_mut();
+        if m.len() > 64 {
+            m.clear();
+        }
+        m.insert(key, computed.clone());
+        computed
+    })
+}
+
+/// One whole-document parse → per-line caret-independent facts. Tracks fenced
+/// code across lines (so a code line's classification depends on context, which
+/// is why this is doc-level), highlights code once, and classifies each prose
+/// line's block marker + inline marks.
+fn analyze(text: &str, format: Format) -> DocAnalysis {
+    let highlights = code_highlights(text);
+    let mut lines = Vec::new();
+    let mut in_fence = false;
+    for (li, line) in text.split('\n').enumerate() {
+        let is_fence = line.trim_start().starts_with("```");
+        let interior = in_fence && !is_fence;
+        if is_fence {
+            in_fence = !in_fence;
+        }
+        let info = if is_fence || interior {
+            // Fence delimiter hides fully off-caret (marker = whole line); an
+            // interior line is always shown (no marker).
+            let n = line.chars().count();
+            let marker_len = if is_fence { line.len() } else { 0 };
+            let colors = line_code_colors(highlights.get(&li), n);
+            LineInfo::new(line, marker_len, "", 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], colors)
+        } else {
+            analyze_prose(format, line)
+        };
+        lines.push(info);
     }
-    let mut charcolors: Vec<Option<[u8; 4]>> = vec![None; chars.len()];
-    if !tokens.is_empty() {
+    DocAnalysis { lines }
+}
+
+/// Classify one prose line: its hideable block marker + scale + whole-line marks
+/// (`classify_block`), then its inline markup (`line_marks`). Both are functions
+/// of the line alone in Step A; cross-line constructs are added in Steps B/C.
+fn analyze_prose(format: Format, line: &str) -> LineInfo {
+    let (marker_len, repl, scale, extra) = classify_block(format, line);
+    let inline = line_marks(format, line);
+    let n = inline.len();
+    LineInfo::new(line, marker_len, repl, scale, extra, false, inline, vec![None; n])
+}
+
+/// Project one line for display (caret-DEPENDENT, cheap): hide/substitute its
+/// block marker unless it's the caret line, map the caret-independent inline
+/// marks + colors into display-char space, overlay host token colors, and emit
+/// spans. Returns the spans and the byte delta `display_leading − source_leading`.
+fn project_line(info: &LineInfo, line: &str, on_caret: bool, base: f32, tokens: &[TokenSpec]) -> (Vec<Span>, i32) {
+    let size = base * info.scale;
+    let reveal = on_caret || info.marker_len == 0;
+    let (display, delta) = if reveal {
+        (line.to_string(), 0)
+    } else {
+        let mut d = String::with_capacity(info.repl.len() + line.len() - info.marker_len);
+        d.push_str(info.repl);
+        d.push_str(&line[info.marker_len..]);
+        (d, info.repl.len() as i32 - info.marker_len as i32)
+    };
+
+    let disp_n = display.chars().count();
+    let mut marks = vec![MarkSet::empty(); disp_n];
+    let mut colors: Vec<Option<[u8; 4]>> = vec![None; disp_n];
+    if reveal {
+        // Marker shown verbatim: source ↔ display chars line up 1:1.
+        for i in 0..disp_n {
+            marks[i] = info.inline[i] | info.extra;
+            colors[i] = info.colors[i];
+        }
+    } else {
+        // Hidden: [0..repl_chars) is the substitute (carries only `extra`), the
+        // rest are source chars past the marker, shifted into display space.
+        let repl_chars = info.repl.chars().count();
+        let marker_src_chars = line[..info.marker_len].chars().count();
+        for slot in marks.iter_mut().take(repl_chars) {
+            *slot = info.extra;
+        }
+        for k in 0..disp_n.saturating_sub(repl_chars) {
+            let si = marker_src_chars + k;
+            marks[repl_chars + k] = info.inline[si] | info.extra;
+            colors[repl_chars + k] = info.colors[si];
+        }
+    }
+
+    // Host tokens are matched on the display text and override syntax colors
+    // (precedence: token > syntax > mark-derived). Code lines aren't tokenized.
+    if !info.is_code && !tokens.is_empty() {
         for spec in tokens {
             for m in (spec.matcher)(&display) {
-                for slot in charcolors
-                    .iter_mut()
-                    .take(m.end.min(chars.len()))
-                    .skip(m.start.min(chars.len()))
-                {
+                for slot in colors.iter_mut().take(m.end.min(disp_n)).skip(m.start.min(disp_n)) {
                     *slot = Some(spec.fg);
                 }
             }
         }
     }
+
+    let chars: Vec<char> = display.chars().collect();
     let mut out = Vec::new();
     let mut j = 0;
-    while j < chars.len() {
-        let mk = charmarks[j];
-        let col = charcolors[j];
+    while j < disp_n {
+        let mk = marks[j];
+        let col = colors[j];
         let start = j;
-        while j < chars.len() && charmarks[j] == mk && charcolors[j] == col {
+        while j < disp_n && marks[j] == mk && colors[j] == col {
             j += 1;
         }
-        out.push(Span {
-            text: chars[start..j].iter().collect(),
-            marks: mk,
-            color: col,
-            size,
-        });
+        out.push(Span { text: chars[start..j].iter().collect(), marks: mk, color: col, size });
     }
     (out, delta)
+}
+
+fn project_cached(
+    info: &LineInfo,
+    line: &str,
+    on_caret: bool,
+    base: f32,
+    tokens: &[TokenSpec],
+    tokens_gen: u64,
+) -> (Vec<Span>, i32) {
+    let key = project_key(info.digest, on_caret, base, tokens_gen);
+    PROJECT_CACHE.with(|c| {
+        if let Some(hit) = c.borrow().get(&key) {
+            return hit.clone();
+        }
+        let computed = project_line(info, line, on_caret, base, tokens);
+        let mut m = c.borrow_mut();
+        if m.len() > 16384 {
+            m.clear();
+        }
+        m.insert(key, computed.clone());
+        computed
+    })
 }
 
 pub fn styled_runs(
@@ -139,16 +321,14 @@ pub fn styled_runs(
     tokens: &[TokenSpec],
     tokens_gen: u64,
 ) -> (Vec<Span>, Vec<i32>) {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let highlights = code_highlights(text);
+    let analysis = analyze_cached(text, format);
     let mut spans = Vec::new();
     // Per-line byte delta: (display leading bytes) − (source leading bytes).
     // 0 on the caret line and on paragraphs/code; negative where a marker is
     // hidden (headings/quotes); positive where a bullet glyph replaces "- ".
-    let mut deltas: Vec<i32> = Vec::with_capacity(lines.len());
-    let mut in_fence = false;
+    let mut deltas: Vec<i32> = Vec::with_capacity(analysis.lines.len());
 
-    for (li, line) in lines.iter().enumerate() {
+    for (li, (info, line)) in analysis.lines.iter().zip(text.split('\n')).enumerate() {
         if li > 0 {
             spans.push(Span {
                 text: "\n".into(),
@@ -157,62 +337,10 @@ pub fn styled_runs(
                 size: base,
             });
         }
-
-        let is_fence = line.trim_start().starts_with("```");
-        let interior = in_fence && !is_fence; // a code-content line (not a delimiter)
-        if is_fence {
-            in_fence = !in_fence;
-        }
         let on_caret = li == caret_line;
-        let line_is_code = is_fence || interior;
-
-        if line_is_code {
-            // Code lines: highlight colors depend on block context, so they are
-            // recomputed (the underlying syntect highlight is itself cached).
-            let (display, delta) = if is_fence {
-                if on_caret {
-                    (line.to_string(), 0)
-                } else {
-                    (String::new(), -(line.len() as i32))
-                }
-            } else {
-                (line.to_string(), 0)
-            };
-            deltas.push(delta);
-            let chars: Vec<char> = display.chars().collect();
-            let charcolors = line_code_colors(highlights.get(&li), chars.len());
-            let mut j = 0;
-            while j < chars.len() {
-                let col = charcolors[j];
-                let start = j;
-                while j < chars.len() && charcolors[j] == col {
-                    j += 1;
-                }
-                spans.push(Span {
-                    text: chars[start..j].iter().collect(),
-                    marks: MarkSet::CODE,
-                    color: col,
-                    size: base,
-                });
-            }
-        } else {
-            // Prose lines: memoize per (format, text, on-caret, base, token-gen).
-            let key = prose_key(format, line, on_caret, base, tokens_gen);
-            let (line_spans, delta) = STYLE_CACHE.with(|c| {
-                if let Some(hit) = c.borrow().get(&key) {
-                    return hit.clone();
-                }
-                let computed = style_prose_line(format, line, base, on_caret, tokens);
-                let mut m = c.borrow_mut();
-                if m.len() > 16384 {
-                    m.clear();
-                }
-                m.insert(key, computed.clone());
-                computed
-            });
-            deltas.push(delta);
-            spans.extend(line_spans);
-        }
+        let (line_spans, delta) = project_cached(info, line, on_caret, base, tokens, tokens_gen);
+        deltas.push(delta);
+        spans.extend(line_spans);
     }
 
     (spans, deltas)
@@ -222,97 +350,72 @@ pub fn styled_runs(
 /// compared against the incremental one).
 #[cfg(test)]
 pub(crate) fn clear_style_cache() {
-    STYLE_CACHE.with(|c| c.borrow_mut().clear());
+    ANALYSIS_CACHE.with(|c| c.borrow_mut().clear());
+    PROJECT_CACHE.with(|c| c.borrow_mut().clear());
     DECO_CACHE.with(|c| c.borrow_mut().clear());
 }
 
-/// Project a source line to its displayed form. On a revealed line (caret line /
-/// code / paragraph) the display equals the source. Otherwise leading block
-/// markers are hidden (headings/quotes) or substituted (bullets → "• "), and the
-/// returned delta is `display_leading_bytes − source_leading_bytes`.
-fn project_line(
-    format: Format,
-    line: &str,
-    base: f32,
-    reveal: bool,
-    line_is_code: bool,
-) -> (String, i32, f32, MarkSet) {
+/// Bullet substitution glyph: U+2022 + space (4 bytes, 2 chars). Replaces a
+/// 2-byte `"- "`/`"* "`/`"+ "` marker, so the byte delta is `+2`.
+const BULLET: &str = "• ";
+
+/// Classify a prose line's hideable block marker → `(marker_len, repl, scale,
+/// extra)`, dispatched by format. `marker_len == 0` means nothing is hidden
+/// (paragraphs, numbered lists). See [`LineInfo`] for field meanings.
+fn classify_block(format: Format, line: &str) -> (usize, &'static str, f32, MarkSet) {
     match format {
-        Format::Typst => project_line_typst(line, base, reveal, line_is_code),
-        _ => project_line_md(line, base, reveal, line_is_code),
+        Format::Typst => classify_block_typst(line),
+        _ => classify_block_md(line),
     }
 }
 
-fn project_line_md(line: &str, base: f32, reveal: bool, line_is_code: bool) -> (String, i32, f32, MarkSet) {
-    if line_is_code {
-        return (line.to_string(), 0, base, MarkSet::CODE);
-    }
-    let (size, extra) = heading_style(line, base);
-    if reveal {
-        return (line.to_string(), 0, size, extra);
-    }
-    // hidden line: project the leading marker
+fn classify_block_md(line: &str) -> (usize, &'static str, f32, MarkSet) {
     let hashes = line.chars().take_while(|c| *c == '#').count();
     if (1..=6).contains(&hashes) && line[hashes..].starts_with(' ') {
-        let m = hashes + 1; // "### "
-        return (line[m..].to_string(), -(m as i32), size, extra);
+        return (hashes + 1, "", heading_scale(hashes), MarkSet::BOLD); // "### "
     }
-    if let Some(rest) = line.strip_prefix("> ") {
-        return (rest.to_string(), -2, base, MarkSet::empty());
+    if line.starts_with("> ") {
+        return (2, "", 1.0, MarkSet::empty());
     }
-    const BULLET: &str = "• "; // U+2022 + space = 4 bytes
     for marker in ["- ", "* ", "+ "] {
-        if let Some(rest) = line.strip_prefix(marker) {
-            let display = format!("{BULLET}{rest}");
-            let delta = BULLET.len() as i32 - marker.len() as i32; // 4 − 2 = +2
-            return (display, delta, base, MarkSet::empty());
+        if line.starts_with(marker) {
+            return (2, BULLET, 1.0, MarkSet::empty());
         }
     }
     let digits = line.chars().take_while(|c| c.is_ascii_digit()).count();
     if digits > 0 && line[digits..].starts_with(". ") {
-        // keep numbered markers visible (they carry meaning); no projection
-        return (line.to_string(), 0, base, MarkSet::empty());
+        // Numbered markers carry meaning; keep them visible (no projection).
+        return (0, "", 1.0, MarkSet::empty());
     }
-    (line.to_string(), 0, base, MarkSet::empty())
+    (0, "", 1.0, MarkSet::empty())
 }
 
-/// Typst block-marker projection (Level 1). Headings use `=` runs; `- ` is an
+/// Typst block-marker classification (Level 1). Headings use `=` runs; `- ` is an
 /// unordered list, `+ ` an enum (kept visible like Markdown's numbered lists).
-fn project_line_typst(line: &str, base: f32, reveal: bool, line_is_code: bool) -> (String, i32, f32, MarkSet) {
-    if line_is_code {
-        return (line.to_string(), 0, base, MarkSet::CODE);
-    }
-    // Heading: one or more leading '=' then a space (level = count of '=').
+fn classify_block_typst(line: &str) -> (usize, &'static str, f32, MarkSet) {
     let eqs = line.chars().take_while(|c| *c == '=').count();
-    let (size, extra) = if (1..=6).contains(&eqs) && line[eqs..].starts_with(' ') {
-        let scale = match eqs {
-            1 => 1.9,
-            2 => 1.55,
-            3 => 1.3,
-            4 => 1.15,
-            _ => 1.05,
-        };
-        (base * scale, MarkSet::BOLD)
-    } else {
-        (base, MarkSet::empty())
-    };
-    if reveal {
-        return (line.to_string(), 0, size, extra);
-    }
     if (1..=6).contains(&eqs) && line[eqs..].starts_with(' ') {
-        let m = eqs + 1; // "== "
-        return (line[m..].to_string(), -(m as i32), size, extra);
+        return (eqs + 1, "", heading_scale(eqs), MarkSet::BOLD); // "== "
     }
-    const BULLET: &str = "• "; // U+2022 + space = 4 bytes
-    if let Some(rest) = line.strip_prefix("- ") {
-        let display = format!("{BULLET}{rest}");
-        return (display, BULLET.len() as i32 - 2, base, MarkSet::empty());
+    if line.starts_with("- ") {
+        return (2, BULLET, 1.0, MarkSet::empty());
     }
-    if line.strip_prefix("+ ").is_some() {
+    if line.starts_with("+ ") {
         // Typst enum marker — keep visible (carries auto-numbering meaning).
-        return (line.to_string(), 0, base, MarkSet::empty());
+        return (0, "", 1.0, MarkSet::empty());
     }
-    (line.to_string(), 0, base, MarkSet::empty())
+    (0, "", 1.0, MarkSet::empty())
+}
+
+/// Heading font-size multiplier by level (1 = largest).
+fn heading_scale(level: usize) -> f32 {
+    match level {
+        1 => 1.9,
+        2 => 1.55,
+        3 => 1.3,
+        4 => 1.15,
+        _ => 1.05,
+    }
 }
 
 fn line_code_colors(
@@ -410,22 +513,6 @@ pub fn link_at(text: &str, cursor: usize) -> Option<(Range<usize>, String)> {
 }
 
 // ---- inline scanner --------------------------------------------------------
-
-fn heading_style(line: &str, base: f32) -> (f32, MarkSet) {
-    let hashes = line.chars().take_while(|c| *c == '#').count();
-    if (1..=6).contains(&hashes) && line[hashes..].starts_with(' ') {
-        let scale = match hashes {
-            1 => 1.9,
-            2 => 1.55,
-            3 => 1.3,
-            4 => 1.15,
-            _ => 1.05,
-        };
-        (base * scale, MarkSet::BOLD)
-    } else {
-        (base, MarkSet::empty())
-    }
-}
 
 /// Per-character inline marks for one line, dispatched by format.
 fn line_marks(format: Format, line: &str) -> Vec<MarkSet> {
