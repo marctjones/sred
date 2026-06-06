@@ -3,6 +3,22 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.2.0-alpha.6] — 2026-06-06
+
+### Added — Level 1 Typst markup live-preview
+- The styling layer is now **format-aware** (it previously applied Markdown rules
+  to Typst notes). Typst notes get inline WYSIWYG markup styling: `=`-run headings
+  (marker hidden off the caret line), `- ` bullets, single-asterisk `*strong*`,
+  `_emph_`, and `` `raw` `` / `$math$` styled like code.
+- Styling/decoration caches are keyed by format (same text styles differently per
+  format — e.g. `*x*` is strong in Typst, emphasis in Markdown).
+- Rendered Typst (math layout, figures) still needs the Typst compiler — see
+  `docs/ROADMAP.md` "Post-0.2.0 — full format support (parser-driven)" for the
+  plan to reach full CommonMark (`pulldown-cmark`) and full Typst (`typst-syntax`).
+
+### Added — API
+- `Editor::can_undo()` / `can_redo()` so hosts can enable/disable Undo/Redo UI.
+
 ## [0.2.0-alpha.5] — 2026-06-06
 
 ### Performance — flat per-keystroke cost (snappy at any document size)
@@ -120,3 +136,4 @@ model with reconstructive save (superseded by the 0.2 source-anchored core).
 [0.2.0-alpha.3]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.3
 [0.2.0-alpha.4]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.4
 [0.2.0-alpha.5]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.5
+[0.2.0-alpha.6]: https://github.com/marctjones/sred/releases/tag/v0.2.0-alpha.6
