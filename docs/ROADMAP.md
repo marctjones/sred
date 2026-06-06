@@ -146,6 +146,12 @@ fidelity suite against the **real notes corpus**; do a perf pass.
 
 ## Post-0.2.0 — full format support (parser-driven)
 
+> **Phase 2 (block-level) has a dedicated, cold-start-able plan:**
+> [`docs/MF_PHASE2.md`](MF_PHASE2.md) — architecture (doc-level analysis +
+> caret-aware projection), invariants, and a step-by-step implementation plan.
+> A fresh session can start from "start phase 2 for mf1/mf2" using that file.
+
+
 0.2.0 ships a **pragmatic, hand-rolled** recognizer: common Markdown constructs
 and (as of v0.2.0-alpha.6) **Level-1 Typst markup** live-preview (headings,
 strong/emph, raw, math, lists). The path to *spec-complete* support is to stop
