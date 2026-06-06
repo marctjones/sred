@@ -113,8 +113,8 @@ manual via `cargo run -p sred-demo`.
       clipboard contract, host font family, triple-click/drag-drop/page, HTML blocks
 - [x] **0.5.0** — IME/preedit + accessibility snapshot + a non-Slint (`sred-egui`)
       adapter (egui feeds AccessKit)
-- [ ] **0.6.0** — find/replace, multiple cursors, auto-pairs, spellcheck hooks
-      ([milestones](https://github.com/marctjones/sred/milestones))
+- [x] **0.6.0** — find/replace, multiple cursors (editing model), auto-pairs,
+      spellcheck hooks ([milestones](https://github.com/marctjones/sred/milestones))
 
 ## Embedding (the reusable surface)
 

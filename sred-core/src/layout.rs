@@ -334,6 +334,7 @@ impl TextRenderer {
                     let (frac, color) = match deco {
                         Decoration::Strike => (0.55, theme.fg),
                         Decoration::Underline => (0.86, theme.link),
+                        Decoration::Squiggle(c) => (0.92, c),
                         Decoration::Chip(_) => continue, // drawn in the pre-glyph pass
                     };
                     let thick = (run.line_height * 0.06).max(1.5);
@@ -525,6 +526,7 @@ impl TextRenderer {
                     let (frac, color) = match deco {
                         Decoration::Strike => (0.55, theme.fg),
                         Decoration::Underline => (0.86, theme.link),
+                        Decoration::Squiggle(c) => (0.92, c),
                         Decoration::Chip(_) => continue,
                     };
                     let thick = (run.line_height * 0.06).max(1.5);

@@ -3,6 +3,33 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.6.0] — 2026-06-06
+
+**Milestone: power editing & conveniences.**
+
+### Added
+- **Find / replace** (#9): `Editor::find` / `replace_all` and
+  `EditorCore::find_next` / `find_prev` / `replace_range`, with `SearchOpts`
+  (case-sensitive, whole-word). `replace_all` is one undoable, byte-lossless edit.
+  `set_search_highlights` draws matches (pale chip; current match in the selection
+  color).
+- **Multiple cursors** (#11): `Editor::add_caret` / `clear_extra_carets` /
+  `carets()`. Insert and Backspace apply at every caret in one transaction; any
+  other command collapses to the primary. *(Editing model + accessor; drawing the
+  secondary carets in the host adapters is a follow-up.)*
+- **Auto-pairs & bracket matching** (#12): typing `([{`/`` ` ``/`"` inserts the
+  closer with the caret inside, wraps a selection, and types over a matching
+  closer. Toggle with `Editor::set_auto_pairs`.
+- **Spellcheck hooks** (#13): `Editor::set_spellchecker(cb)` (host callback,
+  re-run only when text changes) draws a red squiggle (`Decoration::Squiggle`)
+  under flagged ranges; `Editor::word_at(x, y)` returns the word for a correction
+  menu.
+
+### Tests
+- `tests/power_v06.rs` (12): find (case/whole-word/wrap), single-edit replace-all
+  + undo, multi-caret insert/backspace + collapse, auto-pair insert/over/wrap/
+  disable, `word_at`, spellchecker render.
+
 ## [0.5.0] — 2026-06-06
 
 **Milestone: accessibility, international input & ecosystem reach.** Makes sred a

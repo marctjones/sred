@@ -48,6 +48,13 @@ pub struct Editor {
     /// Bumped whenever the token set changes, so the per-line styling cache
     /// (keyed partly on this) invalidates token-colored lines.
     tokens_gen: u64,
+    /// Host spellcheck callback (text → misspelled char ranges) + a cache keyed by
+    /// text hash so it only re-runs when the document changes.
+    spellcheck: Option<Box<dyn Fn(&str) -> Vec<(usize, usize)>>>,
+    spell_cache: Option<(u64, Vec<(usize, usize)>)>,
+    /// Find/replace match highlights (display char ranges) + the current match.
+    search_hits: Vec<(usize, usize)>,
+    search_current: Option<usize>,
 }
 
 /// Globally-unique generation source for token sets, so caches can't confuse two
@@ -69,6 +76,10 @@ impl Editor {
             scroll_y: 0.0,
             tokens: Vec::new(),
             tokens_gen: 0,
+            spellcheck: None,
+            spell_cache: None,
+            search_hits: Vec::new(),
+            search_current: None,
         }
     }
 
@@ -206,6 +217,22 @@ impl Editor {
         self.core.apply(cmd);
     }
 
+    /// Add a secondary caret (multi-cursor). Insert/Backspace then apply at all
+    /// carets; any other command collapses them. `carets()` lists them for drawing.
+    pub fn add_caret(&mut self, idx: usize) {
+        self.core.add_caret(idx);
+    }
+    pub fn clear_extra_carets(&mut self) {
+        self.core.clear_extra_carets();
+    }
+    pub fn carets(&self) -> Vec<usize> {
+        self.core.carets()
+    }
+    /// Enable/disable automatic bracket & quote pairing (on by default).
+    pub fn set_auto_pairs(&mut self, on: bool) {
+        self.core.set_auto_pairs(on);
+    }
+
     /// Whether an undo / redo step is available — for enabling/disabling host
     /// toolbar buttons or menu items.
     pub fn can_undo(&self) -> bool {
@@ -316,6 +343,79 @@ impl Editor {
         self.core.a11y()
     }
 
+    // ---- find / replace -----------------------------------------------------
+
+    /// All matches of `query` as char ranges (host drives the find UI).
+    pub fn find(&self, query: &str, opts: crate::editor::SearchOpts) -> Vec<(usize, usize)> {
+        self.core.find_all(query, opts)
+    }
+    /// Replace every match, returning the count (one undoable edit).
+    pub fn replace_all(&mut self, query: &str, with: &str, opts: crate::editor::SearchOpts) -> usize {
+        self.core.replace_all(query, with, opts)
+    }
+    /// Highlight a set of match ranges (e.g. from [`find`](Self::find)); `current`
+    /// indexes the active match (drawn more strongly). Pass an empty slice to clear.
+    pub fn set_search_highlights(&mut self, hits: &[(usize, usize)], current: Option<usize>) {
+        self.search_hits = hits.to_vec();
+        self.search_current = current;
+    }
+
+    // ---- spellcheck ---------------------------------------------------------
+
+    /// Register a host spellchecker (`text → misspelled char ranges`). It re-runs
+    /// only when the document text changes (cached by content hash). Misspellings
+    /// render with a colored squiggle (`Theme`-independent red by default).
+    pub fn set_spellchecker(&mut self, checker: Box<dyn Fn(&str) -> Vec<(usize, usize)>>) {
+        self.spellcheck = Some(checker);
+        self.spell_cache = None;
+    }
+    pub fn clear_spellchecker(&mut self) {
+        self.spellcheck = None;
+        self.spell_cache = None;
+    }
+    /// The word range + text under a point — for a host "correct this word" menu.
+    pub fn word_at(&mut self, x: f32, y: f32) -> Option<(std::ops::Range<usize>, String)> {
+        let idx = self.hit(x, y);
+        let (s, e) = self.core.word_at(idx);
+        if s == e {
+            return None;
+        }
+        let text = self.core.text();
+        let word: String = text.chars().skip(s).take(e - s).collect();
+        Some((s..e, word))
+    }
+
+    /// Misspelling squiggle + search-highlight decorations for the current text.
+    fn aux_decorations(&mut self, text: &str) -> Vec<(usize, usize, Decoration)> {
+        let mut out = Vec::new();
+        // Search highlights: pale chip for matches, selection color for the current.
+        for (i, &(s, e)) in self.search_hits.iter().enumerate() {
+            let color = if Some(i) == self.search_current {
+                self.theme.selection
+            } else {
+                let c = self.theme.selection;
+                [c[0], c[1], c[2], (c[3] / 2).max(30)]
+            };
+            out.push((s, e, Decoration::Chip(color)));
+        }
+        // Spellcheck squiggles (cached by text hash).
+        if let Some(check) = &self.spellcheck {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            text.hash(&mut h);
+            let key = h.finish();
+            if self.spell_cache.as_ref().map(|(k, _)| *k) != Some(key) {
+                self.spell_cache = Some((key, check(text)));
+            }
+            if let Some((_, ranges)) = &self.spell_cache {
+                for &(s, e) in ranges {
+                    out.push((s, e, Decoration::Squiggle([200, 40, 40, 255])));
+                }
+            }
+        }
+        out
+    }
+
     /// Underline decoration for the active IME preedit (display char range).
     fn preedit_decoration(&self) -> Option<(usize, usize, Decoration)> {
         self.core
@@ -348,6 +448,7 @@ impl Editor {
         let mut decorations = crate::view::decorations(&text, self.core.format());
         decorations.extend(self.token_decorations_with(&text));
         decorations.extend(self.preedit_decoration());
+        decorations.extend(self.aux_decorations(&text));
         let cursor = self.core.display_cursor();
         let selection = self.core.selection();
 
@@ -403,6 +504,7 @@ impl Editor {
         let mut decorations = crate::view::decorations(&text, self.core.format());
         decorations.extend(self.token_decorations_with(&text));
         decorations.extend(self.preedit_decoration());
+        decorations.extend(self.aux_decorations(&text));
         let cursor = self.core.display_cursor();
         let selection = self.core.selection();
 

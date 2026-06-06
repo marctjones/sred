@@ -36,6 +36,8 @@ pub enum Decoration {
     Underline,
     /// A filled chip background (RGBA) behind a token range — drawn before glyphs.
     Chip([u8; 4]),
+    /// A colored under-line marking a misspelling (spellcheck).
+    Squiggle([u8; 4]),
 }
 
 /// Build styled layout runs + per-line prefix bytes (always 0 here — markers are

@@ -32,6 +32,13 @@ pub struct A11ySnapshot {
     pub multiline: bool,
 }
 
+/// Options for [`EditorCore::find_all`] and friends.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SearchOpts {
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Motion {
     Left,
@@ -123,7 +130,14 @@ pub struct EditorCore {
     redo: Vec<Snapshot>,
     last_kind: EditKind,
     preedit: Option<Preedit>,
+    auto_pairs: bool,
+    /// Secondary caret positions (the primary is `cursor`). Insert / backspace
+    /// apply at all carets in one transaction; any other command collapses them.
+    extra_carets: Vec<usize>,
 }
+
+/// Auto-pair table: opener → closer. Same-char entries (quotes/backtick) pair too.
+const PAIRS: &[(char, char)] = &[('(', ')'), ('[', ']'), ('{', '}'), ('`', '`'), ('"', '"')];
 
 impl EditorCore {
     pub fn new(format: Format) -> Self {
@@ -136,7 +150,87 @@ impl EditorCore {
             redo: Vec::new(),
             last_kind: EditKind::None,
             preedit: None,
+            auto_pairs: true,
+            extra_carets: Vec::new(),
         }
+    }
+
+    /// Toggle automatic bracket/quote pairing (on by default).
+    pub fn set_auto_pairs(&mut self, on: bool) {
+        self.auto_pairs = on;
+    }
+
+    // ---- multiple cursors ---------------------------------------------------
+
+    /// Add a secondary caret at `idx` (no-op if it coincides with an existing one).
+    pub fn add_caret(&mut self, idx: usize) {
+        let idx = idx.min(self.len());
+        if idx != self.cursor && !self.extra_carets.contains(&idx) {
+            self.extra_carets.push(idx);
+        }
+    }
+
+    /// Collapse back to the single primary caret.
+    pub fn clear_extra_carets(&mut self) {
+        self.extra_carets.clear();
+    }
+
+    pub fn has_multi_carets(&self) -> bool {
+        !self.extra_carets.is_empty()
+    }
+
+    /// All caret positions (primary + secondaries), sorted — for the host to draw.
+    pub fn carets(&self) -> Vec<usize> {
+        let mut v = self.extra_carets.clone();
+        v.push(self.cursor);
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// Insert `s` at every caret in one undoable transaction (multi-cursor type).
+    fn multi_insert(&mut self, s: &str) {
+        let clean: String = s
+            .chars()
+            .filter(|c| *c == '\n' || (!c.is_control() && !is_private_use(*c)))
+            .collect();
+        if clean.is_empty() {
+            return;
+        }
+        let len = clean.chars().count();
+        let mut pos = self.carets(); // ascending, deduped
+        // Insert right-to-left so earlier offsets stay valid.
+        for &p in pos.iter().rev() {
+            self.rope.insert(p, &clean);
+        }
+        // Caret i (ascending) ends after its own insert plus the i inserts before it.
+        for (i, p) in pos.iter_mut().enumerate() {
+            *p += (i + 1) * len;
+        }
+        self.cursor = *pos.last().unwrap();
+        pos.pop();
+        self.extra_carets = pos;
+        self.anchor = None;
+    }
+
+    /// Backspace at every caret in one undoable transaction.
+    fn multi_delete_backward(&mut self) {
+        let mut pos = self.carets();
+        pos.retain(|&p| p > 0);
+        if pos.is_empty() {
+            return;
+        }
+        for &p in pos.iter().rev() {
+            self.rope.remove(p - 1..p);
+        }
+        // Caret i (ascending) shifts left by the i+1 deletions at/before it.
+        for (i, p) in pos.iter_mut().enumerate() {
+            *p = p.saturating_sub(i + 1);
+        }
+        self.cursor = *pos.last().unwrap();
+        pos.pop();
+        self.extra_carets = pos;
+        self.anchor = None;
     }
 
     /// Load source text verbatim (byte-lossless).
@@ -202,6 +296,7 @@ impl EditorCore {
 
     pub fn set_cursor(&mut self, idx: usize) {
         self.anchor = None;
+        self.extra_carets.clear();
         self.cursor = idx.min(self.len());
         self.last_kind = EditKind::None;
     }
@@ -333,6 +428,93 @@ impl EditorCore {
         self.rope.char_to_line(self.display_cursor().min(self.len()))
     }
 
+    // ---- find / replace -----------------------------------------------------
+
+    /// All non-overlapping matches of `query` as char ranges, left to right.
+    pub fn find_all(&self, query: &str, opts: SearchOpts) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        if query.is_empty() {
+            return out;
+        }
+        let hay: Vec<char> = self.rope.chars().collect();
+        let needle: Vec<char> = query.chars().collect();
+        let eq = |a: char, b: char| {
+            if opts.case_sensitive {
+                a == b
+            } else {
+                a.eq_ignore_ascii_case(&b) || a.to_lowercase().eq(b.to_lowercase())
+            }
+        };
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let n = hay.len();
+        let m = needle.len();
+        let mut i = 0;
+        while i + m <= n {
+            if (0..m).all(|k| eq(hay[i + k], needle[k])) {
+                let boundary_ok = !opts.whole_word
+                    || ((i == 0 || !is_word(hay[i - 1]))
+                        && (i + m == n || !is_word(hay[i + m])));
+                if boundary_ok {
+                    out.push((i, i + m));
+                    i += m; // non-overlapping
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// First match at/after `from` (wrapping to the top).
+    pub fn find_next(&self, from: usize, query: &str, opts: SearchOpts) -> Option<(usize, usize)> {
+        let hits = self.find_all(query, opts);
+        hits.iter()
+            .find(|(s, _)| *s >= from)
+            .or_else(|| hits.first())
+            .copied()
+    }
+
+    /// Last match before `from` (wrapping to the bottom).
+    pub fn find_prev(&self, from: usize, query: &str, opts: SearchOpts) -> Option<(usize, usize)> {
+        let hits = self.find_all(query, opts);
+        hits.iter()
+            .rev()
+            .find(|(_, e)| *e <= from)
+            .or_else(|| hits.last())
+            .copied()
+    }
+
+    /// Replace every match of `query` with `with`, as one undoable edit. Returns
+    /// the number of replacements. Byte-lossless except at the replaced spans.
+    pub fn replace_all(&mut self, query: &str, with: &str, opts: SearchOpts) -> usize {
+        let hits = self.find_all(query, opts);
+        if hits.is_empty() {
+            return 0;
+        }
+        self.checkpoint(EditKind::Structure);
+        // Apply right-to-left so earlier offsets stay valid.
+        for &(s, e) in hits.iter().rev() {
+            self.rope.remove(s..e);
+            self.rope.insert(s, with);
+        }
+        self.cursor = self.cursor.min(self.len());
+        self.anchor = None;
+        hits.len()
+    }
+
+    /// Replace one match span with `with` and select the result (for replace+find).
+    pub fn replace_range(&mut self, range: (usize, usize), with: &str) {
+        let (s, e) = range;
+        if s > e || e > self.len() {
+            return;
+        }
+        self.checkpoint(EditKind::Structure);
+        self.rope.remove(s..e);
+        self.rope.insert(s, with);
+        self.anchor = Some(s);
+        self.cursor = s + with.chars().count();
+    }
+
     // ---- accessibility ------------------------------------------------------
 
     /// A host-agnostic accessibility snapshot of the editor as a multi-line text
@@ -409,9 +591,29 @@ impl EditorCore {
     pub fn apply(&mut self, cmd: Command) {
         // Any committed command cancels an in-flight composition.
         self.preedit = None;
+        // Multi-caret edits stay multi only for Insert/Backspace; anything else
+        // collapses back to the primary caret.
+        if !self.extra_carets.is_empty() {
+            match &cmd {
+                Command::Insert(s) if s != "\n" => {
+                    self.checkpoint(EditKind::InsertBoundary);
+                    self.multi_insert(s);
+                    return;
+                }
+                Command::DeleteBackward => {
+                    self.checkpoint(EditKind::Delete);
+                    self.multi_delete_backward();
+                    return;
+                }
+                _ => self.extra_carets.clear(),
+            }
+        }
         match cmd {
             Command::Insert(s) => {
                 if s == "\n" && self.handle_enter() {
+                    return;
+                }
+                if self.auto_pairs && self.auto_pair_insert(&s) {
                     return;
                 }
                 let kind = if !s.is_empty() && s.chars().all(|c| c.is_alphanumeric()) {
@@ -531,6 +733,48 @@ impl EditorCore {
         } else {
             false
         }
+    }
+
+    /// Auto-pairing for a single-char insert. Returns true if it handled the
+    /// insert: wraps a selection, inserts an empty pair with the caret inside, or
+    /// types over a matching closer. Otherwise returns false (normal insert).
+    fn auto_pair_insert(&mut self, s: &str) -> bool {
+        let mut chars = s.chars();
+        let (Some(c), None) = (chars.next(), chars.next()) else {
+            return false; // only single-char inserts auto-pair
+        };
+        // Wrap a non-empty selection with the pair.
+        if let Some((open, close)) = PAIRS.iter().find(|(o, _)| *o == c).copied() {
+            if let Some((sel_s, sel_e)) = self.selection_range() {
+                self.checkpoint(EditKind::Structure);
+                self.rope.insert(sel_e, &close.to_string());
+                self.rope.insert(sel_s, &open.to_string());
+                self.anchor = Some(sel_s);
+                self.cursor = sel_e + 2; // selection grew by the two delimiters
+                return true;
+            }
+        }
+        // Type over an existing closer (so `()` typing `)` just steps past it).
+        if PAIRS.iter().any(|(_, cl)| *cl == c)
+            && self.selection_range().is_none()
+            && self.cursor < self.len()
+            && self.rope.char(self.cursor) == c
+        {
+            self.cursor += 1;
+            self.last_kind = EditKind::None;
+            return true;
+        }
+        // Open a fresh pair, caret between the delimiters.
+        if let Some((open, close)) = PAIRS.iter().find(|(o, _)| *o == c).copied() {
+            if self.selection_range().is_none() {
+                self.checkpoint(EditKind::InsertBoundary);
+                let pair: String = [open, close].iter().collect();
+                self.rope.insert(self.cursor, &pair);
+                self.cursor += 1;
+                return true;
+            }
+        }
+        false
     }
 
     /// Enter with list/quote continuation + exit-on-empty. Returns true if it
@@ -667,6 +911,11 @@ impl EditorCore {
         self.anchor
             .filter(|a| *a != self.cursor)
             .map(|a| (a.min(self.cursor), a.max(self.cursor)))
+    }
+
+    /// The word (alphanumeric/underscore run) containing `idx`, as a char range.
+    pub fn word_at(&self, idx: usize) -> (usize, usize) {
+        self.word_range(idx)
     }
 
     fn word_range(&self, idx: usize) -> (usize, usize) {
