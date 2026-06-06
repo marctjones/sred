@@ -21,6 +21,7 @@
 use crate::editor::{Command, EditorCore};
 use crate::layout::{Caret, Frame, TextRenderer, Theme};
 use crate::model::Format;
+use crate::view::{Span, TokenSpec};
 
 /// One render's output for the host to display.
 pub struct FrameOut {
@@ -43,6 +44,7 @@ pub struct Editor {
     width: u32,
     viewport_h: f32,
     scroll_y: f32,
+    tokens: Vec<TokenSpec>,
 }
 
 impl Editor {
@@ -54,6 +56,7 @@ impl Editor {
             width: 800,
             viewport_h: 600.0,
             scroll_y: 0.0,
+            tokens: Vec::new(),
         }
     }
 
@@ -102,6 +105,51 @@ impl Editor {
         self.viewport_h = height.max(1.0);
     }
 
+    // ---- domain tokens (host extension) -----------------------------------
+
+    /// Register an inline token kind (e.g. `[[wikilink]]`, `#tag`, url). Matched
+    /// chars render in `spec.fg`; use [`token_at`](Self::token_at) on click.
+    pub fn register_token(&mut self, spec: TokenSpec) {
+        self.tokens.push(spec);
+    }
+    pub fn clear_tokens(&mut self) {
+        self.tokens.clear();
+    }
+
+    /// The token under a viewport point, if any: `(id, value)` — route this to
+    /// your filter / open-url handler.
+    pub fn token_at(&mut self, x: f32, y: f32) -> Option<(String, String)> {
+        let idx = self.hit(x, y);
+        let text = self.core.text();
+        let mut line_start = 0usize;
+        for line in text.split('\n') {
+            let n = line.chars().count();
+            if idx <= line_start + n {
+                let col = idx - line_start;
+                for spec in &self.tokens {
+                    for m in (spec.matcher)(line) {
+                        if col >= m.start && col < m.end {
+                            return Some((spec.id.clone(), m.value));
+                        }
+                    }
+                }
+                return None;
+            }
+            line_start += n + 1;
+        }
+        None
+    }
+
+    fn styled(&self) -> (Vec<Span>, Vec<i32>) {
+        crate::view::styled_runs(
+            &self.core.text(),
+            self.core.format(),
+            self.theme.font_size,
+            self.core.cursor_line(),
+            &self.tokens,
+        )
+    }
+
     // ---- editing -----------------------------------------------------------
 
     pub fn apply(&mut self, cmd: Command) {
@@ -111,7 +159,7 @@ impl Editor {
     // ---- pointer input (x,y in px within the viewport) --------------------
 
     fn hit(&mut self, x: f32, y: f32) -> usize {
-        let (spans, deltas) = self.core.styled_runs(self.theme.font_size);
+        let (spans, deltas) = self.styled();
         let text = self.core.text();
         // viewport y -> document y
         let doc_y = y + self.scroll_y;
@@ -134,7 +182,7 @@ impl Editor {
 
     /// Vertical caret motion (Up/Down) — uses layout to find the column.
     pub fn move_vertical(&mut self, down: bool) {
-        let (spans, deltas) = self.core.styled_runs(self.theme.font_size);
+        let (spans, deltas) = self.styled();
         let text = self.core.text();
         let cur = self.core.cursor();
         let idx =
@@ -161,7 +209,7 @@ impl Editor {
     /// Rasterize the document and (if `follow`) nudge the scroll to keep the
     /// caret on screen. Call after any input; push `FrameOut` to your UI.
     pub fn render(&mut self, follow: bool) -> FrameOut {
-        let (spans, deltas) = self.core.styled_runs(self.theme.font_size);
+        let (spans, deltas) = self.styled();
         let decorations = self.core.decorations();
         let text = self.core.text();
         let cursor = self.core.cursor();

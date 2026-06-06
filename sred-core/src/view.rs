@@ -37,11 +37,28 @@ pub enum Decoration {
 
 /// Build styled layout runs + per-line prefix bytes (always 0 here — markers are
 /// real text, nothing is injected).
+/// One match of a host-registered token within a line (char offsets + the value
+/// the host cares about, e.g. the project/person/tag name or the URL).
+pub struct TokenMatch {
+    pub start: usize,
+    pub end: usize,
+    pub value: String,
+}
+
+/// A host-registered inline token kind (e.g. `[[wikilink]]`, `#tag`, url). The
+/// matcher finds occurrences in a line; matched chars render in `fg`.
+pub struct TokenSpec {
+    pub id: String,
+    pub fg: [u8; 4],
+    pub matcher: Box<dyn Fn(&str) -> Vec<TokenMatch>>,
+}
+
 pub fn styled_runs(
     text: &str,
     _format: Format,
     base: f32,
     caret_line: usize,
+    tokens: &[TokenSpec],
 ) -> (Vec<Span>, Vec<i32>) {
     let lines: Vec<&str> = text.split('\n').collect();
     let highlights = code_highlights(text);
@@ -99,11 +116,22 @@ pub fn styled_runs(
         };
         // Per-char syntax-highlight colors for code lines (empty when the
         // feature is off, so code falls back to the uniform CODE color).
-        let charcolors: Vec<Option<[u8; 4]>> = if line_is_code {
+        let mut charcolors: Vec<Option<[u8; 4]>> = if line_is_code {
             line_code_colors(highlights.get(&li), chars.len())
         } else {
             vec![None; chars.len()]
         };
+        // Host-registered domain tokens (wikilinks/tags/mentions/url) — color the
+        // matched chars. Run on the displayed text so columns line up.
+        if !line_is_code && !tokens.is_empty() {
+            for spec in tokens {
+                for m in (spec.matcher)(display) {
+                    for slot in charcolors.iter_mut().take(m.end.min(chars.len())).skip(m.start.min(chars.len())) {
+                        *slot = Some(spec.fg);
+                    }
+                }
+            }
+        }
 
         let mut j = 0;
         while j < chars.len() {

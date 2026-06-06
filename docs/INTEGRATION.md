@@ -100,7 +100,8 @@ if let Some((id, value)) = ed.token_at(x, y) {
 }
 ```
 
-Until that lands, Noet can recompute its entity chips from `ed.text()` on
+Available now via `ed.register_token(TokenSpec { id, fg, matcher })` and
+`ed.token_at(x, y) -> Option<(id, value)>`. Alternatively, Noet can recompute its entity chips from `ed.text()` on
 `changed` (exactly as it does today from `current-body`) and keep the existing
 filter/click affordances in the chip strip. The in-editor coloring of tokens is
 the only thing waiting on M5.
@@ -118,7 +119,7 @@ the only thing waiting on M5.
 
 - ✅ `Editor` facade (`sred-core/src/api.rs`) — drive + render + byte-lossless text.
 - ✅ Host-providable `Theme`.
-- ◻ Token extension API (§5) — next.
+- ✅ Token extension API (§5) — register_token / token_at on the Editor facade.
 - ◻ Reference: mount in Noet behind the beta toggle.
 
 See `DESIGN.md` for the architecture and `ROADMAP.md` for the milestone order.

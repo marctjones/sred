@@ -20,6 +20,7 @@ pub mod typst_fmt;
 pub mod view;
 
 pub use api::{Editor, FrameOut};
+pub use view::{TokenMatch, TokenSpec};
 pub use editor::{BlockKind, Command, Decoration, EditorCore, Motion, Span};
 pub use format::{backend_for, Caps, DocumentFormat, FormatError};
 pub use layout::{Frame, TextRenderer, Theme};
@@ -150,7 +151,7 @@ mod tests {
     fn fenced_code_block_gets_syntect_colors() {
         // A highlighted code block should produce more than one foreground color.
         let src = "```rust\nfn main() { let x = 1; }\n```\n";
-        let (spans, _) = view::styled_runs(src, Format::Markdown, 16.0);
+        let (spans, _) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[]);
         let colors: std::collections::HashSet<[u8; 4]> =
             spans.iter().filter_map(|s| s.color).collect();
         assert!(
@@ -163,7 +164,7 @@ mod tests {
     #[test]
     fn live_preview_hides_markers_off_caret_line() {
         let src = "para\n## Heading\n- item";
-        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0); // caret line 0
+        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[]); // caret line 0
         let display: String = spans.iter().map(|s| s.text.as_str()).collect();
         assert!(display.contains("Heading"));
         assert!(
@@ -178,10 +179,28 @@ mod tests {
     #[test]
     fn live_preview_reveals_markers_on_caret_line() {
         let src = "## Heading";
-        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0); // caret on line 0
+        let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[]); // caret on line 0
         let display: String = spans.iter().map(|s| s.text.as_str()).collect();
         assert!(display.contains("## Heading"), "caret line shows the raw marker: {display:?}");
         assert_eq!(deltas[0], 0);
+    }
+
+    #[test]
+    fn tokens_color_matched_chars() {
+        let spec = view::TokenSpec {
+            id: "x".into(),
+            fg: [10, 20, 30, 255],
+            matcher: Box::new(|_line: &str| {
+                vec![view::TokenMatch { start: 4, end: 11, value: "Project".into() }]
+            }),
+        };
+        let (spans, _) = view::styled_runs(
+            "see [[Project]] x", Format::Markdown, 16.0, 0, std::slice::from_ref(&spec),
+        );
+        assert!(
+            spans.iter().any(|s| s.color == Some([10, 20, 30, 255])),
+            "registered token color should appear in the rendered spans"
+        );
     }
 
     #[test]
