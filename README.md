@@ -30,6 +30,7 @@ surface.
 |--------------|------|
 | `sred-core`  | UI-free editor core: model, backends, editing engine, cosmic-text raster |
 | `sred-slint` | the reusable `RichTextEditor` Slint component + Rust controller |
+| `sred-egui`  | egui host adapter (`SredWidget`) — depends only on `sred-core` |
 | `sred-demo`  | runnable demo app embedding the component |
 
 ```
@@ -110,7 +111,8 @@ manual via `cargo run -p sred-demo`.
       styling, inline + block-level, with per-token syntax colors
 - [x] **0.4.0** — editing parity: word/document motion + word-delete, portable
       clipboard contract, host font family, triple-click/drag-drop/page, HTML blocks
-- [ ] **0.5.0** — accessibility (AccessKit) + IME/preedit + a non-Slint (egui) adapter
+- [x] **0.5.0** — IME/preedit + accessibility snapshot + a non-Slint (`sred-egui`)
+      adapter (egui feeds AccessKit)
 - [ ] **0.6.0** — find/replace, multiple cursors, auto-pairs, spellcheck hooks
       ([milestones](https://github.com/marctjones/sred/milestones))
 

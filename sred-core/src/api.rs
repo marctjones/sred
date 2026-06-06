@@ -222,6 +222,9 @@ impl Editor {
     // (its `mouse-y` already includes the scroll offset). Do NOT add `scroll_y`.
 
     fn hit(&mut self, x: f32, y: f32) -> usize {
+        // Pointer interaction cancels any IME composition, so hit-testing runs on
+        // the clean buffer text (no injected preedit to map around).
+        self.core.clear_preedit();
         let (spans, deltas) = self.styled();
         let text = self.core.text();
         self.renderer
@@ -287,6 +290,39 @@ impl Editor {
         self.core.paste(text);
     }
 
+    // ---- IME / preedit (host forwards platform composition events) ----------
+
+    /// Set/replace the in-flight IME composition (`caret` = caret char-offset
+    /// within `text`). The preedit is shown underlined and is NOT in `text()`.
+    pub fn set_preedit(&mut self, text: &str, caret: usize) {
+        self.core.set_preedit(text, caret);
+    }
+    /// Commit the composition (or `text`) as a real edit.
+    pub fn commit_preedit(&mut self, text: &str) {
+        self.core.commit_preedit(text);
+    }
+    /// Cancel the composition.
+    pub fn clear_preedit(&mut self) {
+        self.core.clear_preedit();
+    }
+    pub fn has_preedit(&self) -> bool {
+        self.core.has_preedit()
+    }
+
+    // ---- accessibility ------------------------------------------------------
+
+    /// Host-agnostic accessibility snapshot (map onto AccessKit or your backend).
+    pub fn a11y(&self) -> crate::editor::A11ySnapshot {
+        self.core.a11y()
+    }
+
+    /// Underline decoration for the active IME preedit (display char range).
+    fn preedit_decoration(&self) -> Option<(usize, usize, Decoration)> {
+        self.core
+            .preedit_range()
+            .map(|(s, e)| (s, e, Decoration::Underline))
+    }
+
     // ---- scrolling ---------------------------------------------------------
 
     /// Scroll by a pixel delta (e.g. mouse wheel); clamped on the next render.
@@ -305,13 +341,14 @@ impl Editor {
     /// Rasterize the document and (if `follow`) nudge the scroll to keep the
     /// caret on screen. Call after any input; push `FrameOut` to your UI.
     pub fn render(&mut self, follow: bool) -> FrameOut {
-        // Compute the source text once and share it across the whole pipeline
-        // (was cloned 4× per render).
-        let text = self.core.text();
+        // Render the *display* text (buffer with any IME preedit injected); the
+        // saved text() stays clean. Computed once and shared across the pipeline.
+        let text = self.core.display_text();
         let (spans, deltas) = self.styled_with(&text);
         let mut decorations = crate::view::decorations(&text, self.core.format());
         decorations.extend(self.token_decorations_with(&text));
-        let cursor = self.core.cursor();
+        decorations.extend(self.preedit_decoration());
+        let cursor = self.core.display_cursor();
         let selection = self.core.selection();
 
         let out = self.renderer.render(
@@ -361,11 +398,12 @@ impl Editor {
     ///   scroll by calling [`scroll_by`](Self::scroll_by) / [`scroll_to`] and
     ///   re-rendering.
     pub fn render_view(&mut self, follow: bool) -> FrameOut {
-        let text = self.core.text();
+        let text = self.core.display_text();
         let (spans, deltas) = self.styled_with(&text);
         let mut decorations = crate::view::decorations(&text, self.core.format());
         decorations.extend(self.token_decorations_with(&text));
-        let cursor = self.core.cursor();
+        decorations.extend(self.preedit_decoration());
+        let cursor = self.core.display_cursor();
         let selection = self.core.selection();
 
         let out = self.renderer.render_viewport(

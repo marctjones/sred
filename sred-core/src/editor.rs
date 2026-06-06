@@ -16,6 +16,22 @@ use crate::model::{Format, MarkSet};
 
 pub use crate::view::{Decoration, Span};
 
+/// A host-agnostic accessibility snapshot of the editor (a multi-line text
+/// field). Character offsets index into `value`. Produced by [`EditorCore::a11y`]
+/// / [`crate::Editor::a11y`]; hosts attach it to their a11y backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct A11ySnapshot {
+    /// The full document text (the accessible value).
+    pub value: String,
+    /// Caret position, in characters.
+    pub caret: usize,
+    /// Selection start/end, in characters (`start == end` ⇒ no selection).
+    pub selection_start: usize,
+    pub selection_end: usize,
+    /// Always true here — sred is a multi-line editor.
+    pub multiline: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Motion {
     Left,
@@ -87,6 +103,17 @@ struct Snapshot {
     anchor: Option<usize>,
 }
 
+/// In-flight IME composition. The preedit text is **never** stored in the rope
+/// (so `text()` round-trips byte-for-byte mid-composition); it is injected only
+/// into the rendered [`display_text`](EditorCore::display_text). `pos` is the rope
+/// char index where it sits; `caret` is the caret offset within the preedit.
+#[derive(Clone)]
+struct Preedit {
+    pos: usize,
+    text: String,
+    caret: usize,
+}
+
 pub struct EditorCore {
     rope: Rope,
     cursor: usize,        // char index into the rope
@@ -95,6 +122,7 @@ pub struct EditorCore {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     last_kind: EditKind,
+    preedit: Option<Preedit>,
 }
 
 impl EditorCore {
@@ -107,6 +135,7 @@ impl EditorCore {
             undo: Vec::new(),
             redo: Vec::new(),
             last_kind: EditKind::None,
+            preedit: None,
         }
     }
 
@@ -225,6 +254,102 @@ impl EditorCore {
         self.insert(text);
     }
 
+    // ---- IME / preedit composition -----------------------------------------
+    //
+    // The preedit is kept out of the rope so `text()` stays byte-lossless during
+    // composition; it is injected only into `display_text()` for rendering, with
+    // its range available via `preedit_range()` for an underline decoration.
+
+    /// Set/replace the in-flight IME composition. `caret` is the caret offset (in
+    /// chars) within `text`. Starting a composition replaces any active selection.
+    pub fn set_preedit(&mut self, text: &str, caret: usize) {
+        if self.preedit.is_none() {
+            // Begin: a composition replaces the selection (committed edit history).
+            if self.selection_range().is_some() {
+                self.checkpoint(EditKind::Delete);
+                self.delete_selection();
+            }
+        }
+        let pos = self.cursor;
+        if text.is_empty() {
+            self.preedit = None;
+        } else {
+            let caret = caret.min(text.chars().count());
+            self.preedit = Some(Preedit { pos, text: text.to_string(), caret });
+        }
+    }
+
+    /// Commit the composition (or `text` if given) as a real edit and end it.
+    pub fn commit_preedit(&mut self, text: &str) {
+        self.preedit = None;
+        if !text.is_empty() {
+            self.checkpoint(EditKind::InsertBoundary);
+            self.insert(text);
+        }
+    }
+
+    /// Cancel the composition with no insertion.
+    pub fn clear_preedit(&mut self) {
+        self.preedit = None;
+    }
+
+    pub fn has_preedit(&self) -> bool {
+        self.preedit.is_some()
+    }
+
+    /// The preedit's char range in **display** space, for an underline decoration.
+    pub fn preedit_range(&self) -> Option<(usize, usize)> {
+        self.preedit
+            .as_ref()
+            .map(|p| (p.pos, p.pos + p.text.chars().count()))
+    }
+
+    /// The text to render: the buffer with any preedit injected at its position.
+    /// Equals [`text`](Self::text) when not composing.
+    pub fn display_text(&self) -> String {
+        match &self.preedit {
+            None => self.text(),
+            Some(p) => {
+                let mut s: String = self.rope.slice(..p.pos).to_string();
+                s.push_str(&p.text);
+                s.push_str(&self.rope.slice(p.pos..).to_string());
+                s
+            }
+        }
+    }
+
+    /// Caret position in **display** space (inside the preedit while composing).
+    pub fn display_cursor(&self) -> usize {
+        match &self.preedit {
+            None => self.cursor,
+            Some(p) => p.pos + p.caret,
+        }
+    }
+
+    /// Source line index of the display caret (for the styling projection).
+    pub fn display_cursor_line(&self) -> usize {
+        // char_to_line on the display text would need the injected rope; the
+        // preedit is intra-line, so the buffer's caret line is correct.
+        self.rope.char_to_line(self.display_cursor().min(self.len()))
+    }
+
+    // ---- accessibility ------------------------------------------------------
+
+    /// A host-agnostic accessibility snapshot of the editor as a multi-line text
+    /// field. Hosts map this onto their a11y backend (e.g. AccessKit). Offsets are
+    /// **character** indices into `value`. See the `accesskit` feature for a
+    /// ready-made node builder.
+    pub fn a11y(&self) -> A11ySnapshot {
+        let (sel_start, sel_end) = self.selection_range().unwrap_or((self.cursor, self.cursor));
+        A11ySnapshot {
+            value: self.text(),
+            caret: self.cursor,
+            selection_start: sel_start,
+            selection_end: sel_end,
+            multiline: true,
+        }
+    }
+
     /// Move the current selection's text to `target` (drag-and-drop). No-op
     /// without a selection or when the target is inside the selection.
     pub fn move_selection_to(&mut self, target: usize) {
@@ -282,6 +407,8 @@ impl EditorCore {
     // ---- command application ----------------------------------------------
 
     pub fn apply(&mut self, cmd: Command) {
+        // Any committed command cancels an in-flight composition.
+        self.preedit = None;
         match cmd {
             Command::Insert(s) => {
                 if s == "\n" && self.handle_enter() {

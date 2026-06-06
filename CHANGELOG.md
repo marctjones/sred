@@ -3,6 +3,32 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.5.0] — 2026-06-06
+
+**Milestone: accessibility, international input & ecosystem reach.** Makes sred a
+genuine general-purpose component, validated against a second host.
+
+### Added
+- **IME / preedit composition** (#4): `Editor::set_preedit/commit_preedit/
+  clear_preedit/has_preedit`. The preedit is kept **out of the rope** — `text()`
+  stays byte-lossless mid-composition — and injected only into the rendered
+  `display_text()`, shown underlined (`preedit_range()`). Any committed command or
+  pointer interaction cancels the composition.
+- **Accessibility snapshot** (#5): host-agnostic `Editor::a11y() -> A11ySnapshot`
+  (value, caret, selection, multiline). Hosts map it onto their a11y backend; the
+  egui adapter feeds it to egui's `WidgetInfo` (which drives AccessKit).
+- **egui host adapter** (#16): new `sred-egui` crate (`SredWidget`) — depends only
+  on `sred-core`'s public API. Blits the RGBA frame to an egui texture, forwards
+  keyboard/IME/pointer/clipboard events, draws the caret, and reports
+  accessibility. Proves the core is host-agnostic (Slint was the only host
+  before). Input mapping is factored into a headless-testable `apply_event`.
+
+### Tests
+- `tests/ime_a11y.rs` (6): preedit not in `text()` but in `display_text()`,
+  commit/clear/cancel, selection-replace, a11y snapshot.
+- `sred-egui` unit tests (4): text insert, IME preedit→commit, word motion/delete
+  via keys, select-all + undo via the command modifier.
+
 ## [0.4.0] — 2026-06-06
 
 **Milestone: editing parity & quick wins.** Rounds out the everyday editing

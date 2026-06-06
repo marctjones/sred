@@ -1,0 +1,10 @@
+[package]
+name = "sred-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "egui host adapter for the sred editor component"
+
+[dependencies]
+sred-core = { path = "../sred-core" }
+egui = "0.29"
