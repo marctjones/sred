@@ -177,13 +177,22 @@ impl Editor {
     }
 
     fn styled_with(&self, text: &str) -> (Vec<Span>, Vec<i32>) {
-        crate::view::styled_runs(
+        let palette = crate::view::SynPalette {
+            keyword: self.theme.syn_keyword,
+            function: self.theme.syn_function,
+            number: self.theme.syn_number,
+            string: self.theme.syn_string,
+            comment: self.theme.syn_comment,
+            operator: self.theme.syn_operator,
+        };
+        crate::view::styled_runs_with(
             text,
             self.core.format(),
             self.theme.font_size,
             self.core.cursor_line(),
             &self.tokens,
             self.tokens_gen,
+            &palette,
         )
     }
 

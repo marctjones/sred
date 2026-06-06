@@ -28,6 +28,15 @@ pub struct Theme {
     pub link: [u8; 4],
     pub code: [u8; 4],
     pub selection: [u8; 4],
+    /// Per-token syntax-highlight palette (Step D): keyword / function / number /
+    /// string / comment / operator. Drives Typst code-mode coloring (and fenced
+    /// code where syntect is unavailable). Host-overridable.
+    pub syn_keyword: [u8; 4],
+    pub syn_function: [u8; 4],
+    pub syn_number: [u8; 4],
+    pub syn_string: [u8; 4],
+    pub syn_comment: [u8; 4],
+    pub syn_operator: [u8; 4],
 }
 
 impl Default for Theme {
@@ -42,6 +51,12 @@ impl Default for Theme {
             link: [30, 100, 220, 255],
             code: [140, 40, 110, 255],
             selection: [120, 170, 255, 90],
+            syn_keyword: [167, 29, 93, 255],
+            syn_function: [0, 92, 197, 255],
+            syn_number: [0, 134, 109, 255],
+            syn_string: [3, 47, 98, 255],
+            syn_comment: [150, 152, 150, 255],
+            syn_operator: [80, 60, 130, 255],
         }
     }
 }

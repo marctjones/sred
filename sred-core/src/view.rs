@@ -58,6 +58,61 @@ pub struct TokenSpec {
     pub matcher: Box<dyn Fn(&str) -> Vec<TokenMatch>>,
 }
 
+/// A syntax-highlight category for per-token coloring (Step D). The *category* is
+/// theme-independent (so it lives in the text-keyed analysis cache); the concrete
+/// RGBA is resolved at projection time via a host-supplied [`SynPalette`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SynCat {
+    Keyword,
+    Function,
+    Number,
+    Str,
+    Comment,
+    Operator,
+}
+
+/// Host palette mapping each [`SynCat`] to an RGBA color, so per-token syntax
+/// colors are themeable. Build one from your editor theme; [`SynPalette::DEFAULT`]
+/// is a light-background default.
+#[derive(Clone, Copy)]
+pub struct SynPalette {
+    pub keyword: [u8; 4],
+    pub function: [u8; 4],
+    pub number: [u8; 4],
+    pub string: [u8; 4],
+    pub comment: [u8; 4],
+    pub operator: [u8; 4],
+}
+
+impl SynPalette {
+    /// Light-background defaults (used when a host hasn't supplied a palette).
+    pub const DEFAULT: SynPalette = SynPalette {
+        keyword: [167, 29, 93, 255],   // magenta
+        function: [0, 92, 197, 255],   // blue
+        number: [0, 134, 109, 255],    // teal
+        string: [3, 47, 98, 255],      // deep blue
+        comment: [150, 152, 150, 255], // gray
+        operator: [80, 60, 130, 255],  // violet
+    };
+
+    fn of(&self, cat: SynCat) -> [u8; 4] {
+        match cat {
+            SynCat::Keyword => self.keyword,
+            SynCat::Function => self.function,
+            SynCat::Number => self.number,
+            SynCat::Str => self.string,
+            SynCat::Comment => self.comment,
+            SynCat::Operator => self.operator,
+        }
+    }
+}
+
+impl Default for SynPalette {
+    fn default() -> Self {
+        SynPalette::DEFAULT
+    }
+}
+
 // ---- doc-level analysis (caret-INDEPENDENT) -------------------------------
 //
 // Phase 2 splits styling into a caret-independent `analyze()` (one whole-document
@@ -108,9 +163,13 @@ struct LineInfo {
     is_code: bool,
     /// Per-SOURCE-char inline marks (markup-parser output). `CODE`-only for code.
     inline: Vec<MarkSet>,
-    /// Per-SOURCE-char colors (syntect for code; syntax palette for prose in
-    /// Step D). `None` where uncolored.
+    /// Per-SOURCE-char concrete colors (syntect for fenced code). `None` where
+    /// uncolored; prose syntax coloring goes through `syn` instead so it stays
+    /// themeable.
     colors: Vec<Option<[u8; 4]>>,
+    /// Per-SOURCE-char syntax category (Step D), resolved to a color via the
+    /// host [`SynPalette`] at projection time. `None` where uncategorized.
+    syn: Vec<Option<SynCat>>,
     /// Hash of all of the above + the source text: the [`project`] cache seed.
     /// Captures every cross-line dependency (fence state, setext, refs) so a
     /// per-line project cache stays correct even when a line's rendering depends
@@ -119,6 +178,7 @@ struct LineInfo {
 }
 
 impl LineInfo {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         line: &str,
         marker: Marker,
@@ -127,6 +187,7 @@ impl LineInfo {
         is_code: bool,
         inline: Vec<MarkSet>,
         colors: Vec<Option<[u8; 4]>>,
+        syn: Vec<Option<SynCat>>,
     ) -> Self {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -143,8 +204,11 @@ impl LineInfo {
         for c in &colors {
             c.hash(&mut h);
         }
+        for s in &syn {
+            s.hash(&mut h);
+        }
         let digest = h.finish();
-        LineInfo { marker, scale, extra, is_code, inline, colors, digest }
+        LineInfo { marker, scale, extra, is_code, inline, colors, syn, digest }
     }
 }
 
@@ -176,14 +240,17 @@ fn analysis_key(format: Format, text: &str) -> u64 {
 
 /// Cache key for one line's projection: its analysis `digest` (which already
 /// folds in the source text + every cross-line dependency) plus the caret-state,
-/// base font size and token generation that `project` also reads.
-fn project_key(digest: u64, on_caret: bool, base: f32, tokens_gen: u64) -> u64 {
+/// base font size, token generation and syntax palette that `project` also reads.
+fn project_key(digest: u64, on_caret: bool, base: f32, tokens_gen: u64, syn: &SynPalette) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     digest.hash(&mut h);
     on_caret.hash(&mut h);
     base.to_bits().hash(&mut h);
     tokens_gen.hash(&mut h);
+    for c in [syn.keyword, syn.function, syn.number, syn.string, syn.comment, syn.operator] {
+        c.hash(&mut h);
+    }
     h.finish()
 }
 
@@ -237,7 +304,7 @@ fn analyze(text: &str, format: Format) -> DocAnalysis {
             let n = line.chars().count();
             let marker = if is_fence[li] { Marker::lead(line.len(), "") } else { Marker::NONE };
             let colors = line_code_colors(highlights.get(&li), n);
-            LineInfo::new(line, marker, 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], colors)
+            LineInfo::new(line, marker, 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], colors, vec![None; n])
         } else if let Some(md) = &md {
             analyze_prose_md(line, &md[li])
         } else if let Some(typ) = &typ {
@@ -259,10 +326,10 @@ fn analyze_prose_md(line: &str, f: &MdLineFacts) -> LineInfo {
     if f.setext_underline {
         // The `===` / `---` line: hide it fully off-caret (it only existed to mark
         // the line above as a heading); show it verbatim on the caret line.
-        return LineInfo::new(line, Marker::lead(line.len(), ""), 1.0, MarkSet::empty(), false, vec![MarkSet::empty(); n], vec![None; n]);
+        return LineInfo::new(line, Marker::lead(line.len(), ""), 1.0, MarkSet::empty(), false, vec![MarkSet::empty(); n], vec![None; n], vec![None; n]);
     }
     if f.indented_code {
-        return LineInfo::new(line, Marker::NONE, 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], vec![None; n]);
+        return LineInfo::new(line, Marker::NONE, 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], vec![None; n], vec![None; n]);
     }
     let (marker, scale, extra) = if let Some(level) = f.setext_level {
         // Setext title: the text stays (no marker), but scales up + bolds.
@@ -270,12 +337,14 @@ fn analyze_prose_md(line: &str, f: &MdLineFacts) -> LineInfo {
     } else {
         classify_block_md(line)
     };
-    LineInfo::new(line, marker, scale, extra, false, f.inline.clone(), vec![None; n])
+    // Markdown prose carries no per-token syntax colors (code blocks colour via
+    // syntect in `colors`); only Typst code-mode does.
+    LineInfo::new(line, marker, scale, extra, false, f.inline.clone(), vec![None; n], vec![None; n])
 }
 
 fn analyze_prose_typst(line: &str, f: &TypstLineFacts) -> LineInfo {
     let n = line.chars().count();
-    LineInfo::new(line, f.marker, f.scale, f.extra, false, f.inline.clone(), vec![None; n])
+    LineInfo::new(line, f.marker, f.scale, f.extra, false, f.inline.clone(), vec![None; n], f.syn.clone())
 }
 
 /// Per-line output of the whole-document Typst scan ([`scan_typst`]).
@@ -283,6 +352,8 @@ fn analyze_prose_typst(line: &str, f: &TypstLineFacts) -> LineInfo {
 struct TypstLineFacts {
     /// Per-SOURCE-char inline marks (from the typst-syntax highlighter).
     inline: Vec<MarkSet>,
+    /// Per-SOURCE-char syntax category for code-mode coloring (Step D).
+    syn: Vec<Option<SynCat>>,
     /// The line's hideable block marker (heading `=`-run, `- ` list, `/ ` term),
     /// or [`Marker::NONE`] (paragraphs, `+ ` enums kept visible).
     marker: Marker,
@@ -304,6 +375,7 @@ fn scan_typst(text: &str, lines: &[&str]) -> Vec<TypstLineFacts> {
         .iter()
         .map(|l| TypstLineFacts {
             inline: vec![MarkSet::empty(); l.chars().count()],
+            syn: vec![None; l.chars().count()],
             marker: Marker::NONE,
             scale: 1.0,
             extra: MarkSet::empty(),
@@ -370,8 +442,10 @@ fn walk_typst(
             }
         }
     }
-    // Inline mark, clipped per line (a node may span lines, e.g. block math).
-    if let Some(bit) = typst_inline_bit(node) {
+    // Inline mark + syntax category, clipped per line (a node may span lines).
+    let bit = typst_inline_bit(node);
+    let cat = typst_syn_cat(node);
+    if bit.is_some() || cat.is_some() {
         let mut b = r.start;
         while b < r.end {
             let li = line_of(b);
@@ -381,8 +455,15 @@ fn walk_typst(
             if seg_end > b {
                 let cs = text[lstart..b].chars().count();
                 let ce = text[lstart..seg_end].chars().count();
-                for slot in facts[li].inline[cs..ce].iter_mut() {
-                    slot.insert(bit);
+                if let Some(bit) = bit {
+                    for slot in facts[li].inline[cs..ce].iter_mut() {
+                        slot.insert(bit);
+                    }
+                }
+                if let Some(cat) = cat {
+                    for slot in facts[li].syn[cs..ce].iter_mut() {
+                        *slot = Some(cat);
+                    }
                 }
             }
             b = (lend + 1).max(b + 1);
@@ -540,7 +621,14 @@ fn scan_md(text: &str, lines: &[&str], is_fence: &[bool], interior: &[bool]) -> 
 /// block marker unless it's the caret line, map the caret-independent inline
 /// marks + colors into display-char space, overlay host token colors, and emit
 /// spans. Returns the spans and the byte delta `display_leading − source_leading`.
-fn project_line(info: &LineInfo, line: &str, on_caret: bool, base: f32, tokens: &[TokenSpec]) -> (Vec<Span>, i32) {
+fn project_line(
+    info: &LineInfo,
+    line: &str,
+    on_caret: bool,
+    base: f32,
+    tokens: &[TokenSpec],
+    palette: &SynPalette,
+) -> (Vec<Span>, i32) {
     let size = base * info.scale;
     let m = info.marker;
     let reveal = on_caret || m.len == 0;
@@ -557,11 +645,13 @@ fn project_line(info: &LineInfo, line: &str, on_caret: bool, base: f32, tokens: 
     let disp_n = display.chars().count();
     let mut marks = vec![MarkSet::empty(); disp_n];
     let mut colors: Vec<Option<[u8; 4]>> = vec![None; disp_n];
+    let mut syn: Vec<Option<SynCat>> = vec![None; disp_n];
     if reveal {
         // Marker shown verbatim: source ↔ display chars line up 1:1.
         for i in 0..disp_n {
             marks[i] = info.inline[i] | info.extra;
             colors[i] = info.colors[i];
+            syn[i] = info.syn[i];
         }
     } else {
         // Hidden: [indent] [repl] [source past the marker]. The indentation maps
@@ -573,6 +663,7 @@ fn project_line(info: &LineInfo, line: &str, on_caret: bool, base: f32, tokens: 
         for k in 0..indent_chars {
             marks[k] = info.inline[k] | info.extra;
             colors[k] = info.colors[k];
+            syn[k] = info.syn[k];
         }
         for slot in marks.iter_mut().skip(indent_chars).take(repl_chars) {
             *slot = info.extra;
@@ -582,11 +673,23 @@ fn project_line(info: &LineInfo, line: &str, on_caret: bool, base: f32, tokens: 
             let si = indent_chars + marker_src_chars + k;
             marks[head + k] = info.inline[si] | info.extra;
             colors[head + k] = info.colors[si];
+            syn[head + k] = info.syn[si];
         }
     }
 
-    // Host tokens are matched on the display text and override syntax colors
-    // (precedence: token > syntax > mark-derived). Code lines aren't tokenized.
+    // Resolve syntax categories to colors where no concrete color is set yet
+    // (precedence: token > concrete/syntax > mark-derived). Code lines colour via
+    // `colors` (syntect); prose typst code-mode colours via `syn` + palette.
+    for i in 0..disp_n {
+        if colors[i].is_none() {
+            if let Some(cat) = syn[i] {
+                colors[i] = Some(palette.of(cat));
+            }
+        }
+    }
+
+    // Host tokens are matched on the display text and override syntax colors.
+    // Code lines aren't tokenized.
     if !info.is_code && !tokens.is_empty() {
         for spec in tokens {
             for m in (spec.matcher)(&display) {
@@ -612,6 +715,7 @@ fn project_line(info: &LineInfo, line: &str, on_caret: bool, base: f32, tokens: 
     (out, delta)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn project_cached(
     info: &LineInfo,
     line: &str,
@@ -619,13 +723,14 @@ fn project_cached(
     base: f32,
     tokens: &[TokenSpec],
     tokens_gen: u64,
+    palette: &SynPalette,
 ) -> (Vec<Span>, i32) {
-    let key = project_key(info.digest, on_caret, base, tokens_gen);
+    let key = project_key(info.digest, on_caret, base, tokens_gen, palette);
     PROJECT_CACHE.with(|c| {
         if let Some(hit) = c.borrow().get(&key) {
             return hit.clone();
         }
-        let computed = project_line(info, line, on_caret, base, tokens);
+        let computed = project_line(info, line, on_caret, base, tokens, palette);
         let mut m = c.borrow_mut();
         if m.len() > 16384 {
             m.clear();
@@ -635,6 +740,8 @@ fn project_cached(
     })
 }
 
+/// Style the document with the default syntax palette. See [`styled_runs_with`]
+/// to supply a host palette for themeable per-token colors.
 pub fn styled_runs(
     text: &str,
     format: Format,
@@ -642,6 +749,21 @@ pub fn styled_runs(
     caret_line: usize,
     tokens: &[TokenSpec],
     tokens_gen: u64,
+) -> (Vec<Span>, Vec<i32>) {
+    styled_runs_with(text, format, base, caret_line, tokens, tokens_gen, &SynPalette::DEFAULT)
+}
+
+/// As [`styled_runs`], but with a host-supplied [`SynPalette`] for per-token
+/// syntax colors (Step D).
+#[allow(clippy::too_many_arguments)]
+pub fn styled_runs_with(
+    text: &str,
+    format: Format,
+    base: f32,
+    caret_line: usize,
+    tokens: &[TokenSpec],
+    tokens_gen: u64,
+    palette: &SynPalette,
 ) -> (Vec<Span>, Vec<i32>) {
     let analysis = analyze_cached(text, format);
     let mut spans = Vec::new();
@@ -660,7 +782,7 @@ pub fn styled_runs(
             });
         }
         let on_caret = li == caret_line;
-        let (line_spans, delta) = project_cached(info, line, on_caret, base, tokens, tokens_gen);
+        let (line_spans, delta) = project_cached(info, line, on_caret, base, tokens, tokens_gen, palette);
         deltas.push(delta);
         spans.extend(line_spans);
     }
@@ -934,6 +1056,23 @@ fn typst_inline_bit(node: &typst_syntax::LinkedNode) -> Option<MarkSet> {
         | Some(Tag::Punctuation) => Some(MarkSet::CODE),
         // Heading / ListMarker / Comment / Escape / Error: block-level or not
         // styled inline.
+        _ => None,
+    }
+}
+
+/// Per-token syntax *category* for one typst node (Step D), from the crate's
+/// `highlight()` categorizer. Theme-independent — the concrete color is resolved
+/// later via [`SynPalette`]. Only code-mode/math tokens get a category; markup
+/// (strong/emph/links) is styled by marks instead.
+fn typst_syn_cat(node: &typst_syntax::LinkedNode) -> Option<SynCat> {
+    use typst_syntax::{highlight, Tag};
+    match highlight(node)? {
+        Tag::Keyword => Some(SynCat::Keyword),
+        Tag::Function => Some(SynCat::Function),
+        Tag::Number => Some(SynCat::Number),
+        Tag::String => Some(SynCat::Str),
+        Tag::Comment => Some(SynCat::Comment),
+        Tag::Operator => Some(SynCat::Operator),
         _ => None,
     }
 }

@@ -82,6 +82,41 @@ fn inline_marks_still_apply_via_tree() {
 }
 
 #[test]
+fn code_mode_tokens_get_distinct_syntax_colors() {
+    // Step D: `#let f(x) = 1` → keyword / function / number coloured distinctly
+    // from the default palette.
+    use sred_core::view::SynPalette;
+    let p = SynPalette::DEFAULT;
+    let (spans, _) = view::styled_runs("#let f(x) = 1", Format::Typst, 16.0, 0, &[], 0);
+    let color_of = |needle: &str| spans.iter().find(|s| s.text.contains(needle)).and_then(|s| s.color);
+    assert_eq!(color_of("let"), Some(p.keyword), "`let` should use the keyword color");
+    assert_eq!(color_of("f"), Some(p.function), "function name should use the function color");
+    assert_eq!(color_of("1"), Some(p.number), "number literal should use the number color");
+    // The three categories are visibly different.
+    assert!(p.keyword != p.function && p.function != p.number && p.keyword != p.number);
+}
+
+#[test]
+fn markdown_prose_has_no_syntax_colors() {
+    // Step D colours Typst code-mode only; markdown prose stays uncolored.
+    let (spans, _) =
+        view::styled_runs("a plain paragraph of text", Format::Markdown, 16.0, 0, &[], 0);
+    assert!(spans.iter().all(|s| s.color.is_none()), "markdown prose carries no syntax color");
+}
+
+#[test]
+fn host_palette_overrides_syntax_colors() {
+    use sred_core::view::{styled_runs_with, SynPalette};
+    let mut p = SynPalette::DEFAULT;
+    p.keyword = [1, 2, 3, 255];
+    let (spans, _) = styled_runs_with("#let x = 1", Format::Typst, 16.0, 0, &[], 0, &p);
+    assert!(
+        spans.iter().any(|s| s.text.contains("let") && s.color == Some([1, 2, 3, 255])),
+        "a host palette should override the keyword color"
+    );
+}
+
+#[test]
 fn typst_blocks_round_trip_byte_lossless() {
     let src = "= H1\n- a\n  - b\n+ e\n/ T: d\npara *x*\n";
     let nlines = src.split('\n').count();
