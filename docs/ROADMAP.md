@@ -141,3 +141,40 @@ fidelity suite against the **real notes corpus**; do a perf pass.
 - **Biggest risk:** fidelity edge cases on real notes (todo lines, nested lists,
   HTML, Typst regions). Mitigated by M1's corpus test + M8 keeping raw mode as a
   fallback so the release is never all-or-nothing.
+
+---
+
+## Post-0.2.0 — full format support (parser-driven)
+
+0.2.0 ships a **pragmatic, hand-rolled** recognizer: common Markdown constructs
+and (as of v0.2.0-alpha.6) **Level-1 Typst markup** live-preview (headings,
+strong/emph, raw, math, lists). The path to *spec-complete* support is to stop
+hand-maintaining the grammars and instead **drive styling from real parsers**,
+which already expose **source spans** — exactly what the source-anchored
+live-preview needs (map spans → inline styling + marker hiding). This matches the
+project rule of leveraging existing libraries rather than duplicating them.
+
+### MF1 — Full CommonMark via `pulldown-cmark`
+- Replace `line_marks_md` / `project_line_md` with styling derived from
+  `pulldown-cmark`'s `OffsetIter` (event + byte-range stream; MIT; the parser
+  rustdoc uses). Covers the full CommonMark inline + block grammar (nested
+  emphasis/links, reference links, setext headings, nested lists/quotes, etc.),
+  plus GFM tables/strikethrough/tasklists behind its options.
+- Keep the per-line projection/delta/marker-hiding machinery; only the recognizer
+  changes. Gate with the existing fidelity suite + the CommonMark spec examples.
+
+### MF2 — Full Typst via `typst-syntax`
+- Drive Typst styling from `typst-syntax` (the official Typst parser; Apache-2.0,
+  GPL-compatible) — a real syntax tree with spans covering every construct
+  (code mode `#…`, math, `#let`/`#show`/`#figure`, labels/refs, comments).
+- Supersedes the Level-1 hand-rolled Typst recognizer; projection machinery stays.
+
+### MF3 — Rendered fragments (math / figures)
+- The hard part text-styling can't do: typeset `$…$` math and `#figure` output.
+- Realistic approach: compile fragments with the Typst engine and inline them as
+  images (or keep a compiled side-preview). True inline interleaving of rendered
+  fragments with cosmic-text layout is a large, separate effort.
+
+**Decision needed before MF1/MF2:** both add dependencies (`pulldown-cmark`,
+`typst-syntax`) and rework the recognizer layer. The block/inline projection,
+caret/delta mapping, and incremental caches are unaffected.
