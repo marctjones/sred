@@ -84,11 +84,10 @@ Re-`set_theme` + re-`render` when the palette or `Z.f` changes.
 
 ## 5. Domain tokens (`[[wikilink]]`, `+[[project]]`, `@mention`, `#tag`, url)
 
-cosmic-text/sred know nothing about these — they're Noet's. The planned hook
-(M5) is a token registry on the `Editor`:
+cosmic-text/sred know nothing about these — they're Noet's. The hook is a token
+registry on the `Editor`:
 
 ```rust
-// PLANNED API
 ed.register_token(TokenSpec {
     id: "wikilink".into(),
     fg: [31, 122, 68, 255],            // Noet's project ink
