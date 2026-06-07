@@ -173,6 +173,28 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "syntax-highlight")]
+    fn code_highlight_theme_follows_light_dark() {
+        // #21: the fenced-code theme must track the host background, so code is
+        // legible on dark themes (not the hard-coded light theme).
+        let src = "```rust\nfn main() { let x = 1; }\n```\n";
+        let p = view::SynPalette::DEFAULT;
+        let (light, _) = view::styled_runs_with(src, Format::Markdown, 16.0, 0, &[], 0, &p, false);
+        let (dark, _) = view::styled_runs_with(src, Format::Markdown, 16.0, 0, &[], 0, &p, true);
+        let cols = |spans: &[view::Span]| -> Vec<Option<[u8; 4]>> {
+            spans
+                .iter()
+                .filter(|s| s.marks.contains(MarkSet::CODE))
+                .map(|s| s.color)
+                .collect()
+        };
+        let lc = cols(&light);
+        let dc = cols(&dark);
+        assert!(lc.iter().any(|c| c.is_some()), "code is colored");
+        assert_ne!(lc, dc, "light vs dark code highlighting must differ");
+    }
+
+    #[test]
     fn live_preview_hides_markers_off_caret_line() {
         let src = "para\n## Heading\n- item";
         let (spans, deltas) = view::styled_runs(src, Format::Markdown, 16.0, 0, &[], 0); // caret line 0

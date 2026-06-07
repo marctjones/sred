@@ -82,6 +82,14 @@ pub struct FragmentImage {
     pub rgba: Vec<u8>,
 }
 
+/// Whether the host background is dark (Rec. 601 luma < 50%), so fenced-code
+/// highlighting can pick a matching syntect theme and stay legible (#21).
+fn theme_is_dark(theme: &Theme) -> bool {
+    let [r, g, b, _] = theme.bg;
+    let luma = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+    luma < 128.0
+}
+
 /// Globally-unique generation source for token sets, so caches can't confuse two
 /// editors' token configurations.
 fn next_tokens_gen() -> u64 {
@@ -235,6 +243,7 @@ impl Editor {
             &self.tokens,
             self.tokens_gen,
             &palette,
+            theme_is_dark(&self.theme),
         )
     }
 

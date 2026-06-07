@@ -3,6 +3,22 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.3] — 2026-06-07
+
+### Fixed — fenced-code highlight theme follows the host light/dark (#21)
+
+With the `syntax-highlight` feature, `code_highlights` loaded a fixed *light*
+syntect theme ("InspiredGitHub"), so on a dark host `Theme` fenced code rendered
+illegibly (dark glyph colors on a dark background). The renderer now keeps both a
+light and a dark theme (`base16-ocean.dark`) and picks by the **luminance of
+`theme.bg`** (Rec. 601), so code stays legible on either. The light/dark choice is
+folded into the analysis + highlight cache keys, so flipping the host theme
+re-highlights correctly. No new configuration — it tracks `bg` automatically.
+
+`styled_runs_with` gains a trailing `code_dark: bool`; `styled_runs` defaults it
+to light (no test churn). Test (feature-gated): code colors differ between a light
+and dark background for the same block.
+
 ## [0.7.2] — 2026-06-07
 
 ### Changed — bounded cache memory (#20)

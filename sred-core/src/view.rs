@@ -318,10 +318,13 @@ thread_local! {
         std::cell::RefCell::new(BoundedCache::new(LINE_CAP));
 }
 
-fn analysis_key(format: Format, text: &str) -> u64 {
+fn analysis_key(format: Format, text: &str, code_dark: bool) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (format as u8).hash(&mut h);
+    // Fenced-code colors are baked here and depend on the host's light/dark theme,
+    // so a theme flip must invalidate the analysis (#21).
+    code_dark.hash(&mut h);
     text.hash(&mut h);
     h.finish()
 }
@@ -349,13 +352,13 @@ fn project_key(digest: u64, on_caret: bool, base: f32, tokens_gen: u64, syn: &Sy
     h.finish()
 }
 
-fn analyze_cached(text: &str, format: Format) -> std::rc::Rc<DocAnalysis> {
-    let key = analysis_key(format, text);
+fn analyze_cached(text: &str, format: Format, code_dark: bool) -> std::rc::Rc<DocAnalysis> {
+    let key = analysis_key(format, text, code_dark);
     ANALYSIS_CACHE.with(|c| {
         if let Some(hit) = c.borrow().get(&key) {
             return hit.clone();
         }
-        let computed = std::rc::Rc::new(analyze(text, format));
+        let computed = std::rc::Rc::new(analyze(text, format, code_dark));
         c.borrow_mut().insert(key, computed.clone());
         computed
     })
@@ -367,10 +370,10 @@ fn analyze_cached(text: &str, format: Format) -> std::rc::Rc<DocAnalysis> {
 /// single whole-document `pulldown-cmark` pass ([`scan_md`]) so cross-line
 /// constructs (setext headings, indented code, reference links, tables) and all
 /// inline marks come from the reference parser.
-fn analyze(text: &str, format: Format) -> DocAnalysis {
+fn analyze(text: &str, format: Format, code_dark: bool) -> DocAnalysis {
     let perf = std::env::var_os("SRED_PERF").is_some();
     let t0 = std::time::Instant::now();
-    let highlights = code_highlights(text);
+    let highlights = code_highlights(text, code_dark);
     let raw: Vec<&str> = text.split('\n').collect();
     // Fence membership first: a ``` delimiter / its interior is code regardless
     // of what the block parser thinks, and is hidden/shown by caret state below.
@@ -953,11 +956,13 @@ pub fn styled_runs(
         tokens,
         tokens_gen,
         &SynPalette::DEFAULT,
+        false,
     )
 }
 
 /// As [`styled_runs`], but with a host-supplied [`SynPalette`] for per-token
-/// syntax colors (Step D).
+/// syntax colors (Step D) and `code_dark` selecting the fenced-code highlight
+/// theme to match the host background (#21).
 #[allow(clippy::too_many_arguments)]
 pub fn styled_runs_with(
     text: &str,
@@ -967,8 +972,9 @@ pub fn styled_runs_with(
     tokens: &[TokenSpec],
     tokens_gen: u64,
     palette: &SynPalette,
+    code_dark: bool,
 ) -> (Vec<Span>, Vec<i32>) {
-    let analysis = analyze_cached(text, format);
+    let analysis = analyze_cached(text, format, code_dark);
     let mut spans = Vec::new();
     // Per-line byte delta: (display leading bytes) − (source leading bytes).
     // 0 on the caret line and on paragraphs/code; negative where a marker is
@@ -1464,27 +1470,32 @@ fn links_in_line(line: &str) -> Vec<LinkSpan> {
 /// Scan fenced code blocks (```lang … ```) and return per-line highlight colors.
 /// No-op (empty) unless the `syntax-highlight` feature is enabled.
 #[cfg(not(feature = "syntax-highlight"))]
-fn code_highlights(_text: &str) -> CodeHighlights {
+fn code_highlights(_text: &str, _dark: bool) -> CodeHighlights {
     CodeHighlights::new()
 }
 
 #[cfg(feature = "syntax-highlight")]
-fn code_highlights(text: &str) -> CodeHighlights {
+fn code_highlights(text: &str, dark: bool) -> CodeHighlights {
     use std::sync::OnceLock;
     use syntect::highlighting::{Theme, ThemeSet};
     use syntect::parsing::SyntaxSet;
 
-    static RES: OnceLock<(SyntaxSet, Theme)> = OnceLock::new();
-    let (ps, theme) = RES.get_or_init(|| {
+    // Hold both a light and a dark theme; pick to match the host background so
+    // fenced code stays legible on dark themes (#21).
+    static RES: OnceLock<(SyntaxSet, Theme, Theme)> = OnceLock::new();
+    let (ps, light, dark_theme) = RES.get_or_init(|| {
         let ps = SyntaxSet::load_defaults_newlines();
         let mut ts = ThemeSet::load_defaults();
-        // A light theme to match the default light background.
-        let theme = ts
-            .themes
-            .remove("InspiredGitHub")
-            .unwrap_or_else(|| ts.themes.values().next().cloned().unwrap());
-        (ps, theme)
+        let pick = |ts: &mut ThemeSet, name: &str| {
+            ts.themes
+                .remove(name)
+                .unwrap_or_else(|| ts.themes.values().next().cloned().unwrap())
+        };
+        let light = pick(&mut ts, "InspiredGitHub");
+        let dark = pick(&mut ts, "base16-ocean.dark");
+        (ps, light, dark)
     });
+    let theme = if dark { dark_theme } else { light };
 
     let mut out = CodeHighlights::new();
     let lines: Vec<&str> = text.split('\n').collect();
@@ -1504,7 +1515,7 @@ fn code_highlights(text: &str) -> CodeHighlights {
         }
         let body = lines[body_start..j].join("\n");
         // Cached per block by content — unchanged code blocks aren't re-highlighted.
-        for (rel, spans) in highlight_block(ps, theme, lang, &body) {
+        for (rel, spans) in highlight_block(ps, theme, lang, &body, dark) {
             out.insert(body_start + rel, spans);
         }
         i = j; // resume at the closing fence (or end)
@@ -1521,6 +1532,7 @@ fn highlight_block(
     theme: &syntect::highlighting::Theme,
     lang: &str,
     body: &str,
+    dark: bool,
 ) -> Vec<(usize, Vec<(usize, usize, [u8; 4])>)> {
     use std::cell::RefCell;
     use std::collections::hash_map::DefaultHasher;
@@ -1536,6 +1548,7 @@ fn highlight_block(
     let mut hasher = DefaultHasher::new();
     lang.hash(&mut hasher);
     body.hash(&mut hasher);
+    dark.hash(&mut hasher); // light/dark are distinct cache entries (#21)
     let key = hasher.finish();
     if let Some(cached) = HL_CACHE.with(|c| c.borrow().get(&key).cloned()) {
         return cached;

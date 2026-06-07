@@ -143,7 +143,7 @@ fn host_palette_overrides_syntax_colors() {
     use sred_core::view::{styled_runs_with, SynPalette};
     let mut p = SynPalette::DEFAULT;
     p.keyword = [1, 2, 3, 255];
-    let (spans, _) = styled_runs_with("#let x = 1", Format::Typst, 16.0, 0, &[], 0, &p);
+    let (spans, _) = styled_runs_with("#let x = 1", Format::Typst, 16.0, 0, &[], 0, &p, false);
     assert!(
         spans
             .iter()
