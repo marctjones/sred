@@ -391,6 +391,25 @@ mod tests {
     }
 
     #[test]
+    fn analysis_cache_stays_bounded_under_edits() {
+        // Every distinct document text is a fresh analysis entry; the cache must
+        // stay hard-bounded (memory regression guard, #20) rather than growing or
+        // dumping wholesale. Render many distinct texts, then assert the bound.
+        view::clear_style_cache();
+        let cap = view::analysis_cap();
+        for i in 0..(cap * 5) {
+            let text = format!("# Heading {i}\n\nsome body text number {i}\n");
+            let _ = view::styled_runs(&text, Format::Markdown, 16.0, 0, &[], 0);
+        }
+        let (analysis, _project, _deco) = view::cache_sizes();
+        assert!(
+            analysis <= cap,
+            "analysis cache must stay within its cap ({analysis} > {cap})"
+        );
+        assert!(analysis >= 1, "and retain the most recent analyses");
+    }
+
+    #[test]
     fn insert_drops_control_and_pua() {
         let mut ed = EditorCore::new(Format::Markdown);
         ed.apply(Command::Insert("a\u{1b}b\u{f700}c\u{7}".into())); // esc, PUA arrow, bell

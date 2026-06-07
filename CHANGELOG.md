@@ -3,6 +3,26 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.2] — 2026-06-07
+
+### Changed — bounded cache memory (#20)
+
+Footprint, not feel: the styling caches used ad-hoc "clear the whole map when it
+exceeds N" policies, which left memory only loosely bounded and caused a periodic
+full-recompute latency cliff. Worst case: `ANALYSIS_CACHE` retained up to **64
+whole-document analyses** (a `LineInfo` + three vecs per line) — tens of MB on a
+large document.
+
+- New `BoundedCache<K, V>` (cap + FIFO eviction) replaces the four ad-hoc maps
+  (analysis / per-line project / decorations / syntect highlight). One tested
+  policy instead of four copies of `if len > N { clear }`; no more cliff.
+- Right-sized the analysis cache 64 → 8 (the current document plus headroom for
+  undo / format-toggle / a couple of editors sharing the thread).
+
+Output is byte-identical — the `*_matches_fresh` + fidelity gates are unchanged;
+no CPU regression (`perf_probe`). Adds `BoundedCache` unit tests + an
+`analysis_cache_stays_bounded_under_edits` memory-regression guard.
+
 ## [0.7.1] — 2026-06-07
 
 ### Performance (#18) — faster `analyze` on long documents

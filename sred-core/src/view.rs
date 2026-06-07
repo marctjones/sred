@@ -252,17 +252,70 @@ struct DocAnalysis {
     lines: Vec<LineInfo>,
 }
 
+/// A FIFO-bounded cache: at most `cap` entries; inserting a new key past the cap
+/// evicts the oldest-inserted one. Replaces the previous per-cache "clear the
+/// whole map when full" policy, which left memory only loosely bounded and caused
+/// a periodic full-recompute latency cliff. FIFO (not LRU) keeps it simple; for
+/// our access patterns — the current document for the analysis cache, the
+/// viewport-local lines for the per-line caches — the hot set stays resident.
+struct BoundedCache<K, V> {
+    map: HashMap<K, V>,
+    order: std::collections::VecDeque<K>,
+    cap: usize,
+}
+
+impl<K: std::hash::Hash + Eq + Clone, V> BoundedCache<K, V> {
+    fn new(cap: usize) -> Self {
+        BoundedCache {
+            map: HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            cap,
+        }
+    }
+    fn get(&self, k: &K) -> Option<&V> {
+        self.map.get(k)
+    }
+    fn insert(&mut self, k: K, v: V) {
+        // Only track order for genuinely new keys, so `order.len() == map.len()`.
+        if self.map.insert(k.clone(), v).is_none() {
+            self.order.push_back(k);
+            while self.order.len() > self.cap {
+                if let Some(old) = self.order.pop_front() {
+                    self.map.remove(&old);
+                }
+            }
+        }
+    }
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+/// Whole-document analyses are large (a `LineInfo` per line, three vecs each), so
+/// keep only a few — the current document, plus headroom for undo/format-toggle
+/// or a couple of editors sharing this thread. (Was 64 → tens of MB on big docs.)
+const ANALYSIS_CAP: usize = 8;
+/// Per-line caches: generous (covers ~thousands of lines × caret-state variants)
+/// but still hard-bounded.
+const LINE_CAP: usize = 16384;
+
 thread_local! {
     // Whole-document analysis, keyed by (format, text). A content edit misses and
-    // re-parses (~1–2 ms for a 4000-line doc); a caret move is a pure cache hit.
-    static ANALYSIS_CACHE: std::cell::RefCell<HashMap<u64, std::rc::Rc<DocAnalysis>>> =
-        std::cell::RefCell::new(HashMap::new());
+    // re-parses; a caret move / scroll is a pure cache hit.
+    static ANALYSIS_CACHE: std::cell::RefCell<BoundedCache<u64, std::rc::Rc<DocAnalysis>>> =
+        std::cell::RefCell::new(BoundedCache::new(ANALYSIS_CAP));
     // Per-line projected spans + delta, keyed by `project_key`. A line's
     // projection is a pure function of its `LineInfo`, caret-state, base size and
     // token generation, so a caret move only reprojects the two lines whose
-    // caret-state flipped. Bounded; cleared wholesale when large.
-    static PROJECT_CACHE: std::cell::RefCell<HashMap<u64, (Vec<Span>, i32)>> =
-        std::cell::RefCell::new(HashMap::new());
+    // caret-state flipped.
+    static PROJECT_CACHE: std::cell::RefCell<BoundedCache<u64, (Vec<Span>, i32)>> =
+        std::cell::RefCell::new(BoundedCache::new(LINE_CAP));
 }
 
 fn analysis_key(format: Format, text: &str) -> u64 {
@@ -303,11 +356,7 @@ fn analyze_cached(text: &str, format: Format) -> std::rc::Rc<DocAnalysis> {
             return hit.clone();
         }
         let computed = std::rc::Rc::new(analyze(text, format));
-        let mut m = c.borrow_mut();
-        if m.len() > 64 {
-            m.clear();
-        }
-        m.insert(key, computed.clone());
+        c.borrow_mut().insert(key, computed.clone());
         computed
     })
 }
@@ -881,11 +930,7 @@ fn project_cached(
             return hit.clone();
         }
         let computed = project_line(info, line, on_caret, base, tokens, palette);
-        let mut m = c.borrow_mut();
-        if m.len() > 16384 {
-            m.clear();
-        }
-        m.insert(key, computed.clone());
+        c.borrow_mut().insert(key, computed.clone());
         computed
     })
 }
@@ -956,6 +1001,23 @@ pub(crate) fn clear_style_cache() {
     ANALYSIS_CACHE.with(|c| c.borrow_mut().clear());
     PROJECT_CACHE.with(|c| c.borrow_mut().clear());
     DECO_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// Test hook: current `(analysis, project, deco)` cache entry counts, to assert
+/// the caches stay hard-bounded (memory regression guard).
+#[cfg(test)]
+pub(crate) fn cache_sizes() -> (usize, usize, usize) {
+    (
+        ANALYSIS_CACHE.with(|c| c.borrow().len()),
+        PROJECT_CACHE.with(|c| c.borrow().len()),
+        DECO_CACHE.with(|c| c.borrow().len()),
+    )
+}
+
+/// Test hook: the analysis-cache cap (so the bound test can assert against it).
+#[cfg(test)]
+pub(crate) fn analysis_cap() -> usize {
+    ANALYSIS_CAP
 }
 
 /// Bullet substitution glyph: U+2022 + space (4 bytes, 2 chars). Replaces a
@@ -1071,9 +1133,9 @@ fn line_code_colors(
 thread_local! {
     // Per-prose-line strike/underline ranges (line-relative char offsets), keyed
     // by line text. Lets a keystroke re-scan only changed lines. Code lines are
-    // never cached. Bounded; cleared wholesale when large.
-    static DECO_CACHE: std::cell::RefCell<HashMap<u64, Vec<(usize, usize, Decoration)>>> =
-        std::cell::RefCell::new(HashMap::new());
+    // never cached.
+    static DECO_CACHE: std::cell::RefCell<BoundedCache<u64, Vec<(usize, usize, Decoration)>>> =
+        std::cell::RefCell::new(BoundedCache::new(LINE_CAP));
 }
 
 fn deco_key(format: Format, line: &str) -> u64 {
@@ -1109,11 +1171,7 @@ pub fn decorations(text: &str, format: Format) -> Vec<(usize, usize, Decoration)
                 let mut v = Vec::new();
                 push_runs(&m, MarkSet::STRIKE, Decoration::Strike, 0, &mut v);
                 push_runs(&m, MarkSet::LINK, Decoration::Underline, 0, &mut v);
-                let mut mm = c.borrow_mut();
-                if mm.len() > 16384 {
-                    mm.clear();
-                }
-                mm.insert(key, v.clone());
+                c.borrow_mut().insert(key, v.clone());
                 v
             });
             for &(s, e, d) in &rel {
@@ -1471,8 +1529,8 @@ fn highlight_block(
     use syntect::util::LinesWithEndings;
 
     thread_local! {
-        static HL_CACHE: RefCell<HashMap<u64, Vec<(usize, Vec<(usize, usize, [u8; 4])>)>>> =
-            RefCell::new(HashMap::new());
+        static HL_CACHE: RefCell<BoundedCache<u64, Vec<(usize, Vec<(usize, usize, [u8; 4])>)>>> =
+            RefCell::new(BoundedCache::new(256));
     }
 
     let mut hasher = DefaultHasher::new();
@@ -1508,11 +1566,7 @@ fn highlight_block(
     }
 
     HL_CACHE.with(|c| {
-        let mut m = c.borrow_mut();
-        if m.len() > 256 {
-            m.clear(); // simple bound; blocks re-highlight lazily
-        }
-        m.insert(key, block.clone());
+        c.borrow_mut().insert(key, block.clone());
     });
     block
 }
@@ -1535,5 +1589,41 @@ fn push_runs(
         } else {
             i += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod bounded_cache_tests {
+    use super::BoundedCache;
+
+    #[test]
+    fn caps_and_evicts_fifo() {
+        let mut c: BoundedCache<u64, u64> = BoundedCache::new(3);
+        for k in 0..3 {
+            c.insert(k, k * 10);
+        }
+        assert_eq!(c.len(), 3);
+        // Insert a 4th → oldest (key 0) evicted, others retained.
+        c.insert(3, 30);
+        assert_eq!(c.len(), 3, "stays at the cap");
+        assert_eq!(c.get(&0), None, "oldest-inserted evicted (FIFO)");
+        assert_eq!(c.get(&3), Some(&30), "newest present");
+        assert_eq!(c.get(&1), Some(&10), "survivors retained");
+    }
+
+    #[test]
+    fn reinsert_existing_key_does_not_grow_or_reorder() {
+        let mut c: BoundedCache<u64, u64> = BoundedCache::new(2);
+        c.insert(1, 1);
+        c.insert(2, 2);
+        c.insert(1, 100); // update, not a new entry
+        assert_eq!(c.len(), 2);
+        assert_eq!(c.get(&1), Some(&100), "value updated in place");
+        // Next new key evicts the genuinely-oldest (1), since re-insert didn't
+        // refresh its FIFO position.
+        c.insert(3, 3);
+        assert_eq!(c.get(&1), None);
+        assert_eq!(c.get(&2), Some(&2));
+        assert_eq!(c.get(&3), Some(&3));
     }
 }
