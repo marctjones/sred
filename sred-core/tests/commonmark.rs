@@ -142,7 +142,10 @@ fn gfm_table_bolds_header_and_codes_pipes() {
     let (disp, deltas, spans) = render(src, 9);
     // Source kept verbatim (no marker hiding anywhere in the table).
     assert_eq!(disp[0], "| a | b |");
-    assert!(deltas.iter().all(|&d| d == 0), "tables keep source → all deltas 0");
+    assert!(
+        deltas.iter().all(|&d| d == 0),
+        "tables keep source → all deltas 0"
+    );
     // Header cell text is bold; pipe separators are code-marked.
     assert!(
         marks_of(&spans, "a").contains(MarkSet::BOLD),
