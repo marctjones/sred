@@ -46,6 +46,47 @@ fn keystroke_cost_vs_doc_length() {
     println!("(linear growth ⇒ shaping/scan dominate; flat ⇒ already viewport-bound)");
 }
 
+/// Attribute per-keystroke cost: a content **edit** (analyze cache miss → full
+/// re-analyze + full span rebuild) vs a **caret move** (analyze cache hit →
+/// per-line project cache mostly hits, but spans are still produced for the whole
+/// document). The gap = analyze cost; the caret-move floor = the O(doc) span +
+/// project-cache work that runs every render regardless. Targets #18.
+#[test]
+#[ignore]
+fn edit_vs_caretmove_attribution() {
+    use sred_core::Command;
+    println!("\n--- edit (re-analyze) vs caret-move (warm) cost ---");
+    for &n in &[500usize, 2000, 4000] {
+        let body = paragraph(n);
+        let mut e = Editor::from_source(&body, Format::Markdown);
+        e.set_viewport(800, 600.0);
+        e.render_view(true);
+        let iters = 20;
+
+        // Edit: change content each iter → analyze miss.
+        let t = Instant::now();
+        for _ in 0..iters {
+            e.apply(Command::Insert("x".into()));
+            let _ = e.render_view(true);
+        }
+        let edit = t.elapsed().as_micros() as f64 / iters as f64;
+
+        // Caret move: no content change → analyze hit, project mostly cached.
+        let t = Instant::now();
+        for _ in 0..iters {
+            e.apply(Command::Move(sred_core::editor::Motion::Left));
+            e.apply(Command::Move(sred_core::editor::Motion::Right));
+            let _ = e.render_view(true);
+        }
+        let caret = t.elapsed().as_micros() as f64 / (iters as f64 * 2.0);
+
+        println!(
+            "doc {n:5}: edit={edit:8.1}µs  caret-move={caret:8.1}µs  analyze≈{:8.1}µs",
+            edit - caret
+        );
+    }
+}
+
 #[test]
 #[ignore]
 fn stage_breakdown_4000() {

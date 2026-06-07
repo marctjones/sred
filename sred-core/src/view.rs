@@ -208,14 +208,30 @@ impl LineInfo {
         scale.to_bits().hash(&mut h);
         extra.bits().hash(&mut h);
         is_code.hash(&mut h);
-        for m in &inline {
-            m.bits().hash(&mut h);
+        // Sparse hashing: per-char vecs are mostly empty for prose, so hash only
+        // the populated entries (with their index) + the length. This keeps the
+        // digest O(marked chars) instead of O(line length) — the dominant cost
+        // when rebuilding every line's info each keystroke (#18).
+        inline.len().hash(&mut h);
+        for (i, m) in inline.iter().enumerate() {
+            if !m.is_empty() {
+                i.hash(&mut h);
+                m.bits().hash(&mut h);
+            }
         }
-        for c in &colors {
-            c.hash(&mut h);
+        colors.len().hash(&mut h);
+        for (i, c) in colors.iter().enumerate() {
+            if let Some(c) = c {
+                i.hash(&mut h);
+                c.hash(&mut h);
+            }
         }
-        for s in &syn {
-            s.hash(&mut h);
+        syn.len().hash(&mut h);
+        for (i, s) in syn.iter().enumerate() {
+            if let Some(s) = s {
+                i.hash(&mut h);
+                s.hash(&mut h);
+            }
         }
         let digest = h.finish();
         LineInfo {
@@ -303,6 +319,8 @@ fn analyze_cached(text: &str, format: Format) -> std::rc::Rc<DocAnalysis> {
 /// constructs (setext headings, indented code, reference links, tables) and all
 /// inline marks come from the reference parser.
 fn analyze(text: &str, format: Format) -> DocAnalysis {
+    let perf = std::env::var_os("SRED_PERF").is_some();
+    let t0 = std::time::Instant::now();
     let highlights = code_highlights(text);
     let raw: Vec<&str> = text.split('\n').collect();
     // Fence membership first: a ``` delimiter / its interior is code regardless
@@ -321,12 +339,23 @@ fn analyze(text: &str, format: Format) -> DocAnalysis {
     }
     let md = matches!(format, Format::Markdown).then(|| scan_md(text, &raw, &is_fence, &interior));
     let typ = matches!(format, Format::Typst).then(|| scan_typst(text, &raw));
+    let t_parse = t0.elapsed();
 
+    // Consume the per-line facts (move their vecs into `LineInfo` rather than
+    // clone) by advancing an iterator in lockstep with the lines (#18).
+    let mut md_it = md.map(|v| v.into_iter());
+    let mut typ_it = typ.map(|v| v.into_iter());
     let mut lines = Vec::with_capacity(raw.len());
     for (li, &line) in raw.iter().enumerate() {
+        let md_f = md_it
+            .as_mut()
+            .map(|it| it.next().expect("one fact per line"));
+        let typ_f = typ_it
+            .as_mut()
+            .map(|it| it.next().expect("one fact per line"));
         let info = if is_fence[li] || interior[li] {
             // Fence delimiter hides fully off-caret (marker = whole line); an
-            // interior line is always shown (no marker).
+            // interior line is always shown (no marker). Facts (if any) are unused.
             let n = line.chars().count();
             let marker = if is_fence[li] {
                 Marker::lead(line.len(), "")
@@ -344,14 +373,22 @@ fn analyze(text: &str, format: Format) -> DocAnalysis {
                 colors,
                 vec![None; n],
             )
-        } else if let Some(md) = &md {
-            analyze_prose_md(line, &md[li])
-        } else if let Some(typ) = &typ {
-            analyze_prose_typst(line, &typ[li])
+        } else if let Some(f) = md_f {
+            analyze_prose_md(line, f)
+        } else if let Some(f) = typ_f {
+            analyze_prose_typst(line, f)
         } else {
             unreachable!("format is Markdown or Typst")
         };
         lines.push(info);
+    }
+    if perf {
+        eprintln!(
+            "SRED_PERF analyze: parse={:?} build={:?} lines={}",
+            t_parse,
+            t0.elapsed() - t_parse,
+            raw.len()
+        );
     }
     DocAnalysis { lines }
 }
@@ -360,7 +397,7 @@ fn analyze(text: &str, format: Format) -> DocAnalysis {
 /// setext headings/underlines and indented code override the per-line block
 /// classification; everything else uses [`classify_block_md`] for the marker and
 /// the whole-document inline marks for styling.
-fn analyze_prose_md(line: &str, f: &MdLineFacts) -> LineInfo {
+fn analyze_prose_md(line: &str, f: MdLineFacts) -> LineInfo {
     let n = line.chars().count();
     if f.setext_underline {
         // The `===` / `---` line: hide it fully off-caret (it only existed to mark
@@ -395,20 +432,20 @@ fn analyze_prose_md(line: &str, f: &MdLineFacts) -> LineInfo {
         classify_block_md(line)
     };
     // Markdown prose carries no per-token syntax colors (code blocks colour via
-    // syntect in `colors`); only Typst code-mode does.
+    // syntect in `colors`); only Typst code-mode does. Move `inline` in (no clone).
     LineInfo::new(
         line,
         marker,
         scale,
         extra,
         false,
-        f.inline.clone(),
+        f.inline,
         vec![None; n],
         vec![None; n],
     )
 }
 
-fn analyze_prose_typst(line: &str, f: &TypstLineFacts) -> LineInfo {
+fn analyze_prose_typst(line: &str, f: TypstLineFacts) -> LineInfo {
     let n = line.chars().count();
     LineInfo::new(
         line,
@@ -416,9 +453,9 @@ fn analyze_prose_typst(line: &str, f: &TypstLineFacts) -> LineInfo {
         f.scale,
         f.extra,
         false,
-        f.inline.clone(),
+        f.inline,
         vec![None; n],
-        f.syn.clone(),
+        f.syn,
     )
 }
 

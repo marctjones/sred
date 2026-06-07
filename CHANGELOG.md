@@ -3,6 +3,26 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.1] — 2026-06-07
+
+### Performance (#18) — faster `analyze` on long documents
+
+Measured the per-keystroke cost at 4000 lines and found the whole-document
+re-analyze dominated (~26 ms), split roughly evenly between the parse and
+rebuilding 4000 `LineInfo`s. Two safe, correctness-preserving fixes:
+- **Sparse digest hashing** — `LineInfo`'s project-cache seed hashed every
+  per-char entry of the (mostly-empty) inline / colors / syn vecs; now it hashes
+  only populated entries + lengths, so it's O(marked chars) not O(line length).
+- **Move, don't clone** the parser's per-line `inline`/`syn` vecs into `LineInfo`
+  (the analyze loop consumes the facts in lockstep instead of cloning).
+
+Result: at 4000 lines the per-keystroke `analyze` dropped ~26 ms → ~11 ms and a
+content keystroke ~34 ms → ~16 ms (at one 60 fps frame even under load). The
+`*_matches_fresh` + fidelity gates confirm byte-identical output. A new
+`perf_probe::edit_vs_caretmove_attribution` + an `SRED_PERF` analyze breakdown
+make the split measurable. (The remaining whole-document span production each
+render — the caret-move floor — is a separate future optimization.)
+
 ## [0.7.0] — 2026-06-07
 
 **Milestone: general-purpose editor-component hardening.** Rolls up the
