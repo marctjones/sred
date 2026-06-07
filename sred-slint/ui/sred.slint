@@ -1,5 +1,12 @@
 import { ComboBox, ScrollView } from "std-widgets.slint";
 
+// A caret bar (viewport-relative); the host pushes one per cursor (#17).
+export struct CaretBox {
+    x: length,
+    y: length,
+    h: length,
+}
+
 // ---------------------------------------------------------------------------
 // The reusable editor component. All heavy lifting (shaping, cursor, backends)
 // lives in Rust (sred-core); this is a thin render + input surface.
@@ -11,6 +18,8 @@ export component RichTextEditor inherits Rectangle {
     in property <length> caret-y;
     in property <length> caret-h: 22px;
     in property <bool> caret-on: true;
+    // Caret bars (primary + multi-cursors), viewport-relative (#17).
+    in property <[CaretBox]> carets: [{ x: root.caret-x, y: root.caret-y, h: root.caret-h }];
     // The document text, mirrored for accessibility (the pixels come from `frame`,
     // so without this the editing surface is invisible to screen readers — #2).
     in property <string> doc-text;
@@ -157,12 +166,13 @@ export component RichTextEditor inherits Rectangle {
                 double-clicked => { root.pointer-double(self.mouse-x, self.mouse-y + root.scroll-y); }
             }
 
-            // Caret arrives in viewport-relative coordinates from render_viewport.
-            Rectangle {
-                x: root.caret-x;
-                y: root.caret-y;
+            // Carets arrive in viewport-relative coordinates from render_viewport.
+            // One per cursor (primary + any multi-cursors, #17).
+            for c in root.carets: Rectangle {
+                x: c.x;
+                y: c.y;
                 width: 2px;
-                height: root.caret-h;
+                height: c.h;
                 background: #1166dd;
                 visible: root.caret-on && scope.has-focus;
             }
@@ -247,6 +257,7 @@ export component MainWindow inherits Window {
     in property <length> caret-x <=> editor.caret-x;
     in property <length> caret-y <=> editor.caret-y;
     in property <length> caret-h <=> editor.caret-h;
+    in property <[CaretBox]> carets <=> editor.carets;
     in property <bool> caret-on <=> editor.caret-on;
     in-out property <length> scroll-y <=> editor.scroll-y;
     in property <string> source-text;

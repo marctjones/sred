@@ -18,15 +18,17 @@ use sred_core::{Editor, Format};
 pub struct SredWidget {
     editor: Editor,
     tex: Option<egui::TextureHandle>,
+    /// Per-frame textures for rendered math fragments (kept alive while painting).
+    frag_texes: Vec<egui::TextureHandle>,
 }
 
 impl SredWidget {
     pub fn new(format: Format) -> Self {
-        SredWidget { editor: Editor::new(format), tex: None }
+        SredWidget { editor: Editor::new(format), tex: None, frag_texes: Vec::new() }
     }
 
     pub fn from_source(src: &str, format: Format) -> Self {
-        SredWidget { editor: Editor::from_source(src, format), tex: None }
+        SredWidget { editor: Editor::from_source(src, format), tex: None, frag_texes: Vec::new() }
     }
 
     pub fn editor(&self) -> &Editor {
@@ -159,7 +161,11 @@ impl SredWidget {
                 self.editor.drag(x, y);
             } else if response.clicked() {
                 response.request_focus();
-                self.editor.click(x, y);
+                if ui.input(|i| i.modifiers.alt) {
+                    self.editor.add_caret_at(x, y); // Alt+click → multi-cursor
+                } else {
+                    self.editor.click(x, y);
+                }
             }
         }
 
@@ -180,11 +186,36 @@ impl SredWidget {
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         painter.image(tex_id, rect, uv, egui::Color32::WHITE);
 
+        // Overlay rendered math fragments over their source spans (#15).
+        self.frag_texes.clear();
+        if self.editor.has_fragment_renderer() {
+            let frags = self.editor.math_fragments();
+            for frag in &frags {
+                if let Some(img) = self.editor.render_fragment(frag) {
+                    let cimg = egui::ColorImage::from_rgba_unmultiplied(
+                        [img.width as usize, img.height as usize],
+                        &img.rgba,
+                    );
+                    let tex = ui.ctx().load_texture("sred-frag", cimg, egui::TextureOptions::LINEAR);
+                    let size = egui::vec2(img.width as f32, img.height as f32);
+                    for r in self.editor.rect_for_range(frag.start, frag.end) {
+                        let at = egui::Rect::from_min_size(rect.min + egui::vec2(r.x, r.y), size);
+                        painter.image(tex.id(), at, uv, egui::Color32::WHITE);
+                    }
+                    self.frag_texes.push(tex);
+                }
+            }
+        }
+
+        // Carets: primary + any secondary multi-cursors (#17).
         if focused {
-            let c = out.caret;
-            let caret_rect =
-                egui::Rect::from_min_size(rect.min + egui::vec2(c.x, c.y), egui::vec2(1.5, c.h));
-            painter.rect_filled(caret_rect, 0.0, egui::Color32::from_rgb(33, 33, 33));
+            for c in &out.carets {
+                let caret_rect = egui::Rect::from_min_size(
+                    rect.min + egui::vec2(c.x, c.y),
+                    egui::vec2(1.5, c.h),
+                );
+                painter.rect_filled(caret_rect, 0.0, egui::Color32::from_rgb(33, 33, 33));
+            }
         }
 
         // Feed egui accessibility (drives AccessKit) from the editor snapshot.

@@ -594,6 +594,60 @@ impl TextRenderer {
         }
     }
 
+    /// Document-space caret rects for many char offsets, in one buffer build
+    /// (for multiple cursors). Margins included, like the primary caret.
+    pub fn caret_rects(
+        &mut self,
+        spans: &[Span],
+        text: &str,
+        deltas: &[i32],
+        width: u32,
+        theme: &Theme,
+        offsets: &[usize],
+    ) -> Vec<Caret> {
+        let buffer = self.build_buffer(spans, width as f32, theme);
+        offsets
+            .iter()
+            .map(|&o| {
+                let mut c = self.caret_geom(&buffer, text, deltas, o, theme);
+                c.x += theme.margin_x;
+                c.y += theme.margin_y;
+                c
+            })
+            .collect()
+    }
+
+    /// Document-space rects covering the char range `[start, end)` (one per visual
+    /// line it spans). Used to position overlays (e.g. rendered math fragments).
+    pub fn range_rects(
+        &mut self,
+        spans: &[Span],
+        text: &str,
+        deltas: &[i32],
+        width: u32,
+        theme: &Theme,
+        start: usize,
+        end: usize,
+    ) -> Vec<(f32, f32, f32, f32)> {
+        let buffer = self.build_buffer(spans, width as f32, theme);
+        let cs = flat_to_render_cursor(text, deltas, start);
+        let ce = flat_to_render_cursor(text, deltas, end);
+        let mut out = Vec::new();
+        for run in buffer.layout_runs() {
+            if let Some((x, w)) = run.highlight(cs, ce) {
+                if w > 0.0 {
+                    out.push((
+                        x + theme.margin_x,
+                        run.line_top + theme.margin_y,
+                        w,
+                        run.line_height,
+                    ));
+                }
+            }
+        }
+        out
+    }
+
     pub fn hit(
         &mut self,
         spans: &[Span],

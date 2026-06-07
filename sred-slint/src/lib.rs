@@ -426,6 +426,26 @@ fn refresh(window: &MainWindow, ctl: &Rc<RefCell<Controller>>, follow: bool) {
     window.set_caret_x(out.caret.x);
     window.set_caret_y(out.caret.y);
     window.set_caret_h(out.caret.h);
+    // Multi-cursor (#17): push a caret bar per cursor. Only do the extra buffer
+    // build when there's more than one caret; otherwise the default binding draws
+    // the primary from caret-x/y/h.
+    if c.core.has_multi_carets() {
+        let offsets = c.core.carets();
+        let rects = c
+            .renderer
+            .caret_rects(&spans, &text, &prefix_bytes, width, &theme, &offsets);
+        let boxes: Vec<CaretBox> = rects
+            .iter()
+            .map(|r| CaretBox { x: r.x, y: r.y - out.scroll_y, h: r.h })
+            .collect();
+        window.set_carets(slint::ModelRc::new(slint::VecModel::from(boxes)));
+    } else {
+        window.set_carets(slint::ModelRc::new(slint::VecModel::from(vec![CaretBox {
+            x: out.caret.x,
+            y: out.caret.y,
+            h: out.caret.h,
+        }])));
+    }
     // Keep the caret visible even while a selection is active so it never "disappears".
     window.set_caret_on(true);
     window.set_scroll_y(out.scroll_y);

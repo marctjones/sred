@@ -3,6 +3,30 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.0-alpha.3] — 2026-06-07
+
+### Added — offset/range geometry; multi-cursor rendering (#17); fragment overlay (#15)
+
+A new renderer geometry primitive (`TextRenderer::caret_rects` / `range_rects`)
+finishes the two remaining items:
+
+- **Multiple-cursor rendering (#17).** `FrameOut.carets: Vec<Caret>` now reports a
+  bar per cursor. The egui adapter draws them all and adds **Alt+click** to drop a
+  secondary caret; the Slint component draws them via a `CaretBox` repeater
+  (`carets` model), so both host adapters show real multi-cursors. The extra
+  buffer build happens only when more than one caret exists.
+- **Rendered-fragment overlay (#15).** `Editor::rect_for_range(start, end)` returns
+  screen-space rects (viewport-relative) for a span, so a host overlays a rendered
+  math image precisely over its source. The egui adapter wires the full path
+  end-to-end: detect → `render_fragment` (cached) → `rect_for_range` → blit. sred
+  still bundles no compiler (by design — the host supplies it); true inline
+  *reflow* around a fragment's box remains an optional future enhancement.
+
+### Tests
+- `tests/geometry.rs` (5): one caret normally, a rect per cursor (ordered, same
+  line), collapse after motion, `rect_for_range` covers a span, and the math
+  overlay path end-to-end.
+
 ## [0.7.0-alpha.2] — 2026-06-06
 
 ### Fixed / Added — long-standing Slint-host + list gaps (#1, #2, #3)

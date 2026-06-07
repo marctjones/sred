@@ -115,8 +115,9 @@ manual via `cargo run -p sred-demo`.
       adapter (egui feeds AccessKit)
 - [x] **0.6.0** — find/replace, multiple cursors (editing model), auto-pairs,
       spellcheck hooks ([milestones](https://github.com/marctjones/sred/milestones))
-- [~] **0.7.0-alpha** — rendered math/figure *architecture*: fragment detection +
-      host renderer hook (compiler + inline interleaving still to come)
+- [~] **0.7.0-alpha** — rendered math/figure fragments (detection + host renderer
+      hook + overlay geometry; end-to-end in the egui adapter), multi-cursor
+      rendering, list indent/outdent, Slint relayout fix + a11y shadow
 
 ## Embedding (the reusable surface)
 

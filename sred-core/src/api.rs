@@ -27,12 +27,24 @@ use crate::view::{Decoration, Span, TokenSpec};
 pub struct FrameOut {
     /// Full-document RGBA image (host shows it in a scroll container).
     pub frame: Frame,
-    /// Caret rectangle in document coordinates.
+    /// Primary caret rectangle (same coordinate space as `carets[0]`).
     pub caret: Caret,
+    /// All caret rectangles (primary + any secondary multi-cursors), in the same
+    /// coordinate space as `caret`. Usually one element; draw each as a bar.
+    pub carets: Vec<Caret>,
     /// Suggested vertical scroll offset in px after caret-follow.
     pub scroll_y: f32,
     /// Document height in px (for the scroll container / scrollbar).
     pub doc_height: u32,
+}
+
+/// A screen-space rectangle (e.g. where to overlay a rendered math fragment).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
 }
 
 /// An embeddable editor: owns the source buffer, the renderer, the theme, and
@@ -237,6 +249,11 @@ impl Editor {
     pub fn add_caret(&mut self, idx: usize) {
         self.core.add_caret(idx);
     }
+    /// Add a secondary caret at a pointer position (e.g. Alt+click).
+    pub fn add_caret_at(&mut self, x: f32, y: f32) {
+        let idx = self.hit(x, y);
+        self.core.add_caret(idx);
+    }
     pub fn clear_extra_carets(&mut self) {
         self.core.clear_extra_carets();
     }
@@ -407,16 +424,20 @@ impl Editor {
     /// editor caches results by `(src, display, font_size)`, so a host can call
     /// [`render_fragment`](Self::render_fragment) every frame cheaply.
     ///
-    /// sred does not bundle a compiler; the host (or a future feature crate)
-    /// supplies it. Positioning the overlay (and true inline interleaving into the
-    /// text layout) is the remaining follow-up — for now the host overlays the
-    /// image at the fragment's range using its own geometry.
+    /// sred does not bundle a compiler (by design — see DESIGN.md); the host
+    /// supplies it. Position the overlay with [`rect_for_range`](Self::rect_for_range)
+    /// over the fragment's `(start, end)`.
     pub fn set_fragment_renderer(
         &mut self,
         renderer: Box<dyn Fn(&str, bool, f32) -> Option<FragmentImage>>,
     ) {
         self.fragment_renderer = Some(renderer);
         self.fragment_cache.clear();
+    }
+
+    /// Whether a fragment renderer is registered (so hosts can skip the math scan).
+    pub fn has_fragment_renderer(&self) -> bool {
+        self.fragment_renderer.is_some()
     }
 
     /// Math fragments in the current document (char ranges + delimited source +
@@ -436,6 +457,29 @@ impl Editor {
         let img = renderer(&frag.src, frag.display, self.theme.font_size);
         self.fragment_cache.insert(key, img.clone());
         img
+    }
+
+    /// Screen-space rects covering a char range `[start, end)`, in the same
+    /// coordinates as [`render_view`](Self::render_view)'s frame/caret (viewport
+    /// relative, scroll already subtracted) — one rect per visual line. Use it to
+    /// overlay a rendered fragment over its source span, or for any range UI.
+    pub fn rect_for_range(&mut self, start: usize, end: usize) -> Vec<Rect> {
+        let text = self.core.display_text();
+        let (spans, deltas) = self.styled_with(&text);
+        self.renderer
+            .range_rects(&spans, &text, &deltas, self.width, &self.theme, start, end)
+            .into_iter()
+            .map(|(x, y, w, h)| Rect { x, y: y - self.scroll_y, w, h })
+            .collect()
+    }
+
+    /// Caret rects (primary + secondary multi-cursors) in document space, in one
+    /// buffer build. Empty extra carets → just the primary `out.caret` is used.
+    fn caret_rects_doc(&mut self, text: &str) -> Vec<Caret> {
+        let offsets = self.core.carets();
+        let (spans, deltas) = self.styled_with(text);
+        self.renderer
+            .caret_rects(&spans, text, &deltas, self.width, &self.theme, &offsets)
     }
 
     /// Misspelling squiggle + search-highlight decorations for the current text.
@@ -530,9 +574,16 @@ impl Editor {
         self.scroll_y = scroll.clamp(0.0, max_scroll);
 
         let doc_height = out.frame.height;
+        // Multi-cursor: extra caret rects (document space, same as `out.caret`).
+        let carets = if self.core.has_multi_carets() {
+            self.caret_rects_doc(&text)
+        } else {
+            vec![out.caret]
+        };
         FrameOut {
             frame: out.frame,
             caret: out.caret,
+            carets,
             scroll_y: self.scroll_y,
             doc_height,
         }
@@ -575,9 +626,23 @@ impl Editor {
             selection,
         );
         self.scroll_y = out.scroll_y;
+        // Multi-cursor: extra caret rects, viewport-relative (scroll subtracted),
+        // matching `out.caret`.
+        let carets = if self.core.has_multi_carets() {
+            self.caret_rects_doc(&text)
+                .into_iter()
+                .map(|mut c| {
+                    c.y -= out.scroll_y;
+                    c
+                })
+                .collect()
+        } else {
+            vec![out.caret]
+        };
         FrameOut {
             frame: out.frame,
             caret: out.caret,
+            carets,
             scroll_y: out.scroll_y,
             doc_height: out.doc_height,
         }
