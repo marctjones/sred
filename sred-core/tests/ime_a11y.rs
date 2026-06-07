@@ -13,9 +13,17 @@ fn preedit_is_not_in_text_but_is_in_display() {
     e.core_mut().set_cursor(1); // between a|b
     e.set_preedit("ni", 2);
     assert_eq!(e.text(), "ab", "preedit must NOT be in the saved text");
-    assert_eq!(e.core_mut().display_text(), "anib", "preedit shows in the rendered text");
+    assert_eq!(
+        e.core_mut().display_text(),
+        "anib",
+        "preedit shows in the rendered text"
+    );
     assert_eq!(e.core_mut().preedit_range(), Some((1, 3)));
-    assert_eq!(e.core_mut().display_cursor(), 3, "caret sits after the 2-char preedit");
+    assert_eq!(
+        e.core_mut().display_cursor(),
+        3,
+        "caret sits after the 2-char preedit"
+    );
     assert!(e.has_preedit());
 }
 
@@ -46,7 +54,11 @@ fn any_command_cancels_preedit() {
     e.core_mut().set_cursor(1);
     e.set_preedit("ni", 2);
     e.apply(Command::Insert("X".into()));
-    assert_eq!(e.text(), "aXb", "the committed key wins; preedit is dropped");
+    assert_eq!(
+        e.text(),
+        "aXb",
+        "the committed key wins; preedit is dropped"
+    );
     assert!(!e.has_preedit());
 }
 
@@ -55,7 +67,11 @@ fn preedit_replaces_selection_on_start() {
     let mut e = ed("hello");
     e.apply(Command::SelectAll);
     e.set_preedit("ni", 2);
-    assert_eq!(e.text(), "", "starting composition removes the selection from the buffer");
+    assert_eq!(
+        e.text(),
+        "",
+        "starting composition removes the selection from the buffer"
+    );
     e.commit_preedit("你");
     assert_eq!(e.text(), "你");
 }
@@ -66,7 +82,10 @@ fn a11y_snapshot_reflects_value_and_selection() {
     let snap = e.a11y();
     assert_eq!(snap.value, "hello world");
     assert!(snap.multiline);
-    assert_eq!((snap.selection_start, snap.selection_end), (snap.caret, snap.caret));
+    assert_eq!(
+        (snap.selection_start, snap.selection_end),
+        (snap.caret, snap.caret)
+    );
 
     e.core_mut().set_cursor(0);
     e.apply(Command::Select(sred_core::editor::Motion::WordRight)); // select "hello"

@@ -131,7 +131,7 @@ struct Preedit {
 
 pub struct EditorCore {
     rope: Rope,
-    cursor: usize,        // char index into the rope
+    cursor: usize, // char index into the rope
     anchor: Option<usize>,
     format: Format,
     undo: Vec<Snapshot>,
@@ -207,7 +207,7 @@ impl EditorCore {
         }
         let len = clean.chars().count();
         let mut pos = self.carets(); // ascending, deduped
-        // Insert right-to-left so earlier offsets stay valid.
+                                     // Insert right-to-left so earlier offsets stay valid.
         for &p in pos.iter().rev() {
             self.rope.insert(p, &clean);
         }
@@ -327,7 +327,10 @@ impl EditorCore {
     pub fn select_line_at(&mut self, idx: usize) {
         let line = self.rope.char_to_line(idx.min(self.len()));
         let s = self.rope.line_to_char(line);
-        let e = self.rope.line_to_char((line + 1).min(self.rope.len_lines())).min(self.len());
+        let e = self
+            .rope
+            .line_to_char((line + 1).min(self.rope.len_lines()))
+            .min(self.len());
         self.anchor = Some(s);
         self.cursor = e;
         self.last_kind = EditKind::None;
@@ -378,7 +381,11 @@ impl EditorCore {
             self.preedit = None;
         } else {
             let caret = caret.min(text.chars().count());
-            self.preedit = Some(Preedit { pos, text: text.to_string(), caret });
+            self.preedit = Some(Preedit {
+                pos,
+                text: text.to_string(),
+                caret,
+            });
         }
     }
 
@@ -433,7 +440,8 @@ impl EditorCore {
     pub fn display_cursor_line(&self) -> usize {
         // char_to_line on the display text would need the injected rope; the
         // preedit is intra-line, so the buffer's caret line is correct.
-        self.rope.char_to_line(self.display_cursor().min(self.len()))
+        self.rope
+            .char_to_line(self.display_cursor().min(self.len()))
     }
 
     // ---- find / replace -----------------------------------------------------
@@ -460,8 +468,7 @@ impl EditorCore {
         while i + m <= n {
             if (0..m).all(|k| eq(hay[i + k], needle[k])) {
                 let boundary_ok = !opts.whole_word
-                    || ((i == 0 || !is_word(hay[i - 1]))
-                        && (i + m == n || !is_word(hay[i + m])));
+                    || ((i == 0 || !is_word(hay[i - 1])) && (i + m == n || !is_word(hay[i + m])));
                 if boundary_ok {
                     out.push((i, i + m));
                     i += m; // non-overlapping
@@ -727,7 +734,10 @@ impl EditorCore {
                 let strip = if raw.starts_with('\t') {
                     1
                 } else {
-                    raw.chars().take(INDENT.len()).take_while(|c| *c == ' ').count()
+                    raw.chars()
+                        .take(INDENT.len())
+                        .take_while(|c| *c == ' ')
+                        .count()
                 };
                 if strip > 0 {
                     self.rope.remove(ls..ls + strip);
@@ -866,9 +876,8 @@ impl EditorCore {
         let plen = pair.chars().count();
         if let Some((s, e)) = self.selection_range() {
             let sel = self.rope.slice(s..e).to_string();
-            let wrapped = sel.chars().count() >= 2 * plen
-                && sel.starts_with(pair)
-                && sel.ends_with(pair);
+            let wrapped =
+                sel.chars().count() >= 2 * plen && sel.starts_with(pair) && sel.ends_with(pair);
             if wrapped {
                 let inner: String = {
                     let chars: Vec<char> = sel.chars().collect();
@@ -939,7 +948,11 @@ impl EditorCore {
         let body_str = raw.trim_end_matches('\n');
         let strip = existing_marker_len(body_str); // chars of any current block marker
         let content: String = body_str.chars().skip(strip).collect();
-        let new_prefix = if add { block_marker(kind) } else { String::new() };
+        let new_prefix = if add {
+            block_marker(kind)
+        } else {
+            String::new()
+        };
         let divider = matches!(kind, BlockKind::Divider) && add;
         let new_line = if divider {
             "---".to_string()
@@ -994,7 +1007,9 @@ impl EditorCore {
             }
             Motion::LineEnd => {
                 let line = self.rope.char_to_line(self.cursor);
-                let next = self.rope.line_to_char((line + 1).min(self.rope.len_lines()));
+                let next = self
+                    .rope
+                    .line_to_char((line + 1).min(self.rope.len_lines()));
                 // Back up over a trailing newline if present.
                 let mut end = next;
                 if end > self.cursor && end <= self.len() && self.rope.char(end - 1) == '\n' {

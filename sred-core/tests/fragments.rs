@@ -42,7 +42,11 @@ fn fragment_renderer_is_called_and_cached() {
     let mut e = Editor::from_source("$x^2$ and $x^2$\n", Format::Markdown);
     e.set_fragment_renderer(Box::new(move |src, _display, _fs| {
         c.set(c.get() + 1);
-        Some(FragmentImage { width: src.len() as u32, height: 10, rgba: vec![0; src.len() * 40] })
+        Some(FragmentImage {
+            width: src.len() as u32,
+            height: 10,
+            rgba: vec![0; src.len() * 40],
+        })
     }));
     let frags = e.math_fragments();
     assert_eq!(frags.len(), 2);
@@ -51,7 +55,11 @@ fn fragment_renderer_is_called_and_cached() {
     // Second fragment has identical src → served from cache, renderer not called again.
     let _ = e.render_fragment(&frags[1]);
     let _ = e.render_fragment(&frags[0]);
-    assert_eq!(calls.get(), 1, "identical fragments compile once (cached by src)");
+    assert_eq!(
+        calls.get(),
+        1,
+        "identical fragments compile once (cached by src)"
+    );
 }
 
 #[test]

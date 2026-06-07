@@ -205,7 +205,11 @@ impl Editor {
             for spec in &self.tokens {
                 if let Some(bg) = spec.bg {
                     for m in (spec.matcher)(line) {
-                        out.push((line_start + m.start, line_start + m.end, Decoration::Chip(bg)));
+                        out.push((
+                            line_start + m.start,
+                            line_start + m.end,
+                            Decoration::Chip(bg),
+                        ));
                     }
                 }
             }
@@ -382,7 +386,12 @@ impl Editor {
         self.core.find_all(query, opts)
     }
     /// Replace every match, returning the count (one undoable edit).
-    pub fn replace_all(&mut self, query: &str, with: &str, opts: crate::editor::SearchOpts) -> usize {
+    pub fn replace_all(
+        &mut self,
+        query: &str,
+        with: &str,
+        opts: crate::editor::SearchOpts,
+    ) -> usize {
         self.core.replace_all(query, with, opts)
     }
     /// Highlight a set of match ranges (e.g. from [`find`](Self::find)); `current`
@@ -450,7 +459,11 @@ impl Editor {
     /// Returns `None` if no renderer is set or it declined the fragment.
     pub fn render_fragment(&mut self, frag: &crate::view::MathFragment) -> Option<FragmentImage> {
         let renderer = self.fragment_renderer.as_ref()?;
-        let key = (frag.src.clone(), frag.display, self.theme.font_size.to_bits());
+        let key = (
+            frag.src.clone(),
+            frag.display,
+            self.theme.font_size.to_bits(),
+        );
         if let Some(hit) = self.fragment_cache.get(&key) {
             return hit.clone();
         }
@@ -469,7 +482,12 @@ impl Editor {
         self.renderer
             .range_rects(&spans, &text, &deltas, self.width, &self.theme, start, end)
             .into_iter()
-            .map(|(x, y, w, h)| Rect { x, y: y - self.scroll_y, w, h })
+            .map(|(x, y, w, h)| Rect {
+                x,
+                y: y - self.scroll_y,
+                w,
+                h,
+            })
             .collect()
     }
 

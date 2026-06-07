@@ -305,19 +305,24 @@ impl TextRenderer {
 
         let fg = Color::rgba(theme.fg[0], theme.fg[1], theme.fg[2], theme.fg[3]);
         let (mx, my) = (theme.margin_x as i32, theme.margin_y as i32);
-        buffer.draw(&mut self.font_system, &mut self.swash, fg, |x, y, w, h, color| {
-            for dy in 0..h as i32 {
-                for dx in 0..w as i32 {
-                    let px = x + dx + mx;
-                    let py = y + dy + my;
-                    if px < 0 || py < 0 || px >= width as i32 || py >= height as i32 {
-                        continue;
+        buffer.draw(
+            &mut self.font_system,
+            &mut self.swash,
+            fg,
+            |x, y, w, h, color| {
+                for dy in 0..h as i32 {
+                    for dx in 0..w as i32 {
+                        let px = x + dx + mx;
+                        let py = y + dy + my;
+                        if px < 0 || py < 0 || px >= width as i32 || py >= height as i32 {
+                            continue;
+                        }
+                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                        blend(&mut rgba[idx..idx + 4], color);
                     }
-                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                    blend(&mut rgba[idx..idx + 4], color);
                 }
-            }
-        });
+            },
+        );
 
         // strikethrough / underline lines (cosmic-text draws neither)
         for &(s, e, deco) in decorations {
@@ -697,9 +702,8 @@ impl TextRenderer {
 /// text).
 fn linecol(text: &str, char_idx: usize) -> (usize, usize) {
     let mut line = 0usize;
-    let mut chars = 0usize;
     let mut byte_in_line = 0usize;
-    for ch in text.chars() {
+    for (chars, ch) in text.chars().enumerate() {
         if chars == char_idx {
             return (line, byte_in_line);
         }
@@ -709,7 +713,6 @@ fn linecol(text: &str, char_idx: usize) -> (usize, usize) {
         } else {
             byte_in_line += ch.len_utf8();
         }
-        chars += 1;
     }
     (line, byte_in_line)
 }
@@ -827,7 +830,10 @@ fn split_lines(spans: &[Span]) -> Vec<LineParts<'_>> {
                         s.size.to_bits().hash(&mut hasher);
                         runs.push((head, s.marks, s.color, s.size));
                     }
-                    out.push(LineParts { runs: std::mem::take(&mut runs), sig: hasher.finish() });
+                    out.push(LineParts {
+                        runs: std::mem::take(&mut runs),
+                        sig: hasher.finish(),
+                    });
                     hasher = DefaultHasher::new();
                     rest = tail;
                 }
@@ -848,7 +854,10 @@ fn split_lines(spans: &[Span]) -> Vec<LineParts<'_>> {
     // BidiParagraphs: a trailing '\n' does NOT create a final empty line, but an
     // entirely empty document is still one (empty) line.
     if !runs.is_empty() || out.is_empty() {
-        out.push(LineParts { runs, sig: hasher.finish() });
+        out.push(LineParts {
+            runs,
+            sig: hasher.finish(),
+        });
     }
     out
 }
@@ -856,7 +865,11 @@ fn split_lines(spans: &[Span]) -> Vec<LineParts<'_>> {
 /// Source character range `[start, end)` spanned by the visible runs, used to
 /// skip decorations that aren't on screen. Display line index == source line
 /// index (1:1; long lines wrap into multiple runs sharing a `line_i`).
-fn visible_source_range(vis: &[cosmic_text::LayoutRun], text: &str, deltas: &[i32]) -> (usize, usize) {
+fn visible_source_range(
+    vis: &[cosmic_text::LayoutRun],
+    text: &str,
+    deltas: &[i32],
+) -> (usize, usize) {
     let _ = deltas;
     if vis.is_empty() {
         return (0, usize::MAX);
@@ -962,8 +975,19 @@ mod tests {
         let text = "Hello world\nsecond line\nthird line";
         let spans = spans_for(text);
         let deltas = vec![0; 3];
-        let out =
-            r.render_viewport(&spans, text, &deltas, &[], 400, 200, 0.0, false, &theme, 0, None);
+        let out = r.render_viewport(
+            &spans,
+            text,
+            &deltas,
+            &[],
+            400,
+            200,
+            0.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
         assert_eq!(out.frame.height, 200, "frame must be viewport-sized");
         assert!(
             ink(&out.frame.rgba, theme.bg) > 50,
@@ -977,8 +1001,32 @@ mod tests {
         let theme = Theme::default();
         let before = "abc";
         let after = "abcXYZ";
-        let r1 = r.render_viewport(&spans_for(before), before, &[0], &[], 400, 120, 0.0, false, &theme, 0, None);
-        let r2 = r.render_viewport(&spans_for(after), after, &[0], &[], 400, 120, 0.0, false, &theme, 0, None);
+        let r1 = r.render_viewport(
+            &spans_for(before),
+            before,
+            &[0],
+            &[],
+            400,
+            120,
+            0.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
+        let r2 = r.render_viewport(
+            &spans_for(after),
+            after,
+            &[0],
+            &[],
+            400,
+            120,
+            0.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
         assert!(
             r1.frame.rgba != r2.frame.rgba,
             "typing a character must change the visible frame"
@@ -994,11 +1042,45 @@ mod tests {
         let theme = Theme::default();
         let short: String = "line\n".repeat(10);
         let long: String = "line\n".repeat(4000);
-        let s = r.render_viewport(&spans_for(&short), &short, &[0; 11], &[], 400, 200, 0.0, false, &theme, 0, None);
-        let l = r.render_viewport(&spans_for(&long), &long, &[0; 4001], &[], 400, 200, 0.0, false, &theme, 0, None);
-        assert_eq!(s.frame.rgba.len(), l.frame.rgba.len(), "frame size must be flat");
-        assert!(l.doc_height > s.doc_height, "doc_height still reflects full length");
-        assert!(l.doc_height > 4000 * 10, "long doc reports a tall scroll range");
+        let s = r.render_viewport(
+            &spans_for(&short),
+            &short,
+            &[0; 11],
+            &[],
+            400,
+            200,
+            0.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
+        let l = r.render_viewport(
+            &spans_for(&long),
+            &long,
+            &[0; 4001],
+            &[],
+            400,
+            200,
+            0.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
+        assert_eq!(
+            s.frame.rgba.len(),
+            l.frame.rgba.len(),
+            "frame size must be flat"
+        );
+        assert!(
+            l.doc_height > s.doc_height,
+            "doc_height still reflects full length"
+        );
+        assert!(
+            l.doc_height > 4000 * 10,
+            "long doc reports a tall scroll range"
+        );
     }
 
     #[test]
@@ -1011,10 +1093,40 @@ mod tests {
             text.push_str(&format!("row{i}\n"));
         }
         let deltas = vec![0; 201];
-        let top = r.render_viewport(&spans_for(&text), &text, &deltas, &[], 400, 200, 0.0, false, &theme, 0, None);
-        let down = r.render_viewport(&spans_for(&text), &text, &deltas, &[], 400, 200, 1500.0, false, &theme, 0, None);
-        assert!(top.frame.rgba != down.frame.rgba, "scrolling must change the frame");
-        assert!(ink(&down.frame.rgba, theme.bg) > 50, "scrolled viewport still paints");
+        let top = r.render_viewport(
+            &spans_for(&text),
+            &text,
+            &deltas,
+            &[],
+            400,
+            200,
+            0.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
+        let down = r.render_viewport(
+            &spans_for(&text),
+            &text,
+            &deltas,
+            &[],
+            400,
+            200,
+            1500.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
+        assert!(
+            top.frame.rgba != down.frame.rgba,
+            "scrolling must change the frame"
+        );
+        assert!(
+            ink(&down.frame.rgba, theme.bg) > 50,
+            "scrolled viewport still paints"
+        );
     }
 
     // The incremental persistent-buffer path (reused renderer) must produce a
@@ -1032,23 +1144,77 @@ mod tests {
         for (i, t) in seq.iter().enumerate() {
             let d = vec![0i32; t.matches('\n').count() + 1];
             let cur = if i + 1 == seq.len() { final_cursor } else { 0 };
-            a.render_viewport(&spans_for(t), t, &d, &[], w, h, 0.0, false, &theme, cur, None);
+            a.render_viewport(
+                &spans_for(t),
+                t,
+                &d,
+                &[],
+                w,
+                h,
+                0.0,
+                false,
+                &theme,
+                cur,
+                None,
+            );
         }
-        let inc = a.render_viewport(&spans_for(last), last, &dl, &[], w, h, 0.0, false, &theme, final_cursor, None);
+        let inc = a.render_viewport(
+            &spans_for(last),
+            last,
+            &dl,
+            &[],
+            w,
+            h,
+            0.0,
+            false,
+            &theme,
+            final_cursor,
+            None,
+        );
 
         // Renderer B: fresh, renders only the final state (full rebuild).
         let mut b = TextRenderer::new();
-        let full = b.render_viewport(&spans_for(last), last, &dl, &[], w, h, 0.0, false, &theme, final_cursor, None);
+        let full = b.render_viewport(
+            &spans_for(last),
+            last,
+            &dl,
+            &[],
+            w,
+            h,
+            0.0,
+            false,
+            &theme,
+            final_cursor,
+            None,
+        );
 
-        assert_eq!(inc.doc_height, full.doc_height, "doc_height diverged for {seq:?}");
-        assert!((inc.caret.y - full.caret.y).abs() < 0.01 && (inc.caret.x - full.caret.x).abs() < 0.01,
-            "caret diverged for {seq:?}: inc=({},{}) full=({},{})", inc.caret.x, inc.caret.y, full.caret.x, full.caret.y);
-        assert!(inc.frame.rgba == full.frame.rgba, "incremental frame != full-rebuild frame for {seq:?}");
+        assert_eq!(
+            inc.doc_height, full.doc_height,
+            "doc_height diverged for {seq:?}"
+        );
+        assert!(
+            (inc.caret.y - full.caret.y).abs() < 0.01 && (inc.caret.x - full.caret.x).abs() < 0.01,
+            "caret diverged for {seq:?}: inc=({},{}) full=({},{})",
+            inc.caret.x,
+            inc.caret.y,
+            full.caret.x,
+            full.caret.y
+        );
+        assert!(
+            inc.frame.rgba == full.frame.rgba,
+            "incremental frame != full-rebuild frame for {seq:?}"
+        );
     }
 
     #[test]
     fn incremental_edit_one_line_matches_full() {
-        assert_inc_eq_full(&["alpha\nbravo\ncharlie\ndelta", "alpha\nbravoX\ncharlie\ndelta"], 6);
+        assert_inc_eq_full(
+            &[
+                "alpha\nbravo\ncharlie\ndelta",
+                "alpha\nbravoX\ncharlie\ndelta",
+            ],
+            6,
+        );
     }
 
     #[test]
@@ -1071,10 +1237,7 @@ mod tests {
     fn incremental_line_count_change_then_edit_matches_full() {
         // step 2 changes the line count (structural full rebuild), step 3 edits
         // a line (incremental on the rebuilt buffer).
-        assert_inc_eq_full(
-            &["a\nb\nc", "a\nb\nc\nd", "a\nb\nc\nD"],
-            0,
-        );
+        assert_inc_eq_full(&["a\nb\nc", "a\nb\nc\nd", "a\nb\nc\nD"], 0);
     }
 
     #[test]
@@ -1087,7 +1250,8 @@ mod tests {
         assert_inc_eq_full(&["hello world", "hello\nworld"], 0); // Enter split
         assert_inc_eq_full(&["hello\nworld", "helloworld"], 0); // backspace join
         assert_inc_eq_full(&["a\nb\nc\n", "a\nb\nc\nd"], 8); // append past trailing newline
-        assert_inc_eq_full(&["# H\nbody\n- x\n- y", "# H\nbody\n- x\n- mid\n- y"], 0); // insert bullet
+        assert_inc_eq_full(&["# H\nbody\n- x\n- y", "# H\nbody\n- x\n- mid\n- y"], 0);
+        // insert bullet
     }
 
     #[test]
@@ -1095,19 +1259,73 @@ mod tests {
         // A line whose font size changes (heading toggling) must re-layout right.
         let theme = Theme::default();
         let (w, h) = (400u32, 300u32);
-        let plain = vec![Span { text: "title\nbody".into(), marks: MarkSet::empty(), color: None, size: 18.0 }];
+        let plain = vec![Span {
+            text: "title\nbody".into(),
+            marks: MarkSet::empty(),
+            color: None,
+            size: 18.0,
+        }];
         let heading = vec![
-            Span { text: "title".into(), marks: MarkSet::empty(), color: None, size: 30.0 },
-            Span { text: "\nbody".into(), marks: MarkSet::empty(), color: None, size: 18.0 },
+            Span {
+                text: "title".into(),
+                marks: MarkSet::empty(),
+                color: None,
+                size: 30.0,
+            },
+            Span {
+                text: "\nbody".into(),
+                marks: MarkSet::empty(),
+                color: None,
+                size: 18.0,
+            },
         ];
         let d = vec![0i32; 2];
         let mut a = TextRenderer::new();
-        a.render_viewport(&plain, "title\nbody", &d, &[], w, h, 0.0, false, &theme, 0, None);
-        let inc = a.render_viewport(&heading, "title\nbody", &d, &[], w, h, 0.0, false, &theme, 0, None);
+        a.render_viewport(
+            &plain,
+            "title\nbody",
+            &d,
+            &[],
+            w,
+            h,
+            0.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
+        let inc = a.render_viewport(
+            &heading,
+            "title\nbody",
+            &d,
+            &[],
+            w,
+            h,
+            0.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
         let mut b = TextRenderer::new();
-        let full = b.render_viewport(&heading, "title\nbody", &d, &[], w, h, 0.0, false, &theme, 0, None);
+        let full = b.render_viewport(
+            &heading,
+            "title\nbody",
+            &d,
+            &[],
+            w,
+            h,
+            0.0,
+            false,
+            &theme,
+            0,
+            None,
+        );
         assert_eq!(inc.doc_height, full.doc_height, "heading height diverged");
-        assert!(inc.frame.rgba == full.frame.rgba, "heading incremental frame != full");
+        assert!(
+            inc.frame.rgba == full.frame.rgba,
+            "heading incremental frame != full"
+        );
     }
 
     #[test]
@@ -1122,7 +1340,19 @@ mod tests {
         // Caret at the document end; scroll past the bottom (clamps to max) so
         // the final line — and the caret — sit inside the viewport.
         let n = text.chars().count();
-        let out = r.render_viewport(&spans_for(&text), &text, &deltas, &[], 400, 200, 50_000.0, false, &theme, n, None);
+        let out = r.render_viewport(
+            &spans_for(&text),
+            &text,
+            &deltas,
+            &[],
+            400,
+            200,
+            50_000.0,
+            false,
+            &theme,
+            n,
+            None,
+        );
         assert!(
             out.caret.y >= -theme.line_height && out.caret.y <= 200.0 + theme.line_height,
             "caret y should be within (near) the viewport, got {}",

@@ -29,9 +29,15 @@ fn frameout_reports_a_rect_per_cursor() {
     assert_eq!(out.carets.len(), 3, "three cursors → three caret rects");
     // Distinct x positions (same line, increasing columns).
     let xs: Vec<f32> = out.carets.iter().map(|c| c.x).collect();
-    assert!(xs[0] < xs[1] && xs[1] < xs[2], "carets ordered left→right: {xs:?}");
+    assert!(
+        xs[0] < xs[1] && xs[1] < xs[2],
+        "carets ordered left→right: {xs:?}"
+    );
     // All on the first line → equal y.
-    assert!(out.carets.iter().all(|c| (c.y - out.carets[0].y).abs() < 0.5));
+    assert!(out
+        .carets
+        .iter()
+        .all(|c| (c.y - out.carets[0].y).abs() < 0.5));
 }
 
 #[test]
@@ -62,13 +68,22 @@ fn fragment_overlay_geometry_end_to_end() {
     // overlay it — the full host-overlay path for #15.
     let mut e = ed("see $x^2$ here");
     e.set_fragment_renderer(Box::new(|src, _d, _fs| {
-        Some(FragmentImage { width: 24, height: 18, rgba: vec![0; 24 * 18 * 4 * (src.len() / src.len())] })
+        Some(FragmentImage {
+            width: 24,
+            height: 18,
+            rgba: vec![0; 24 * 18 * 4 * (src.len() / src.len())],
+        })
     }));
     let frags = e.math_fragments();
     assert_eq!(frags.len(), 1);
-    let img = e.render_fragment(&frags[0]).expect("renderer produces an image");
+    let img = e
+        .render_fragment(&frags[0])
+        .expect("renderer produces an image");
     assert_eq!((img.width, img.height), (24, 18));
     let rects = e.rect_for_range(frags[0].start, frags[0].end);
-    assert!(!rects.is_empty(), "the $x^2$ span has a screen rect to overlay onto");
+    assert!(
+        !rects.is_empty(),
+        "the $x^2$ span has a screen rect to overlay onto"
+    );
     assert!(rects[0].w > 0.0);
 }

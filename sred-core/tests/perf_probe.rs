@@ -61,7 +61,10 @@ fn stage_breakdown_4000() {
             e.apply(Command::Insert("x".into()));
             let t = Instant::now();
             let _ = e.render_view(true);
-            println!("TOTAL render_view {:>8.1}µs", t.elapsed().as_micros() as f64);
+            println!(
+                "TOTAL render_view {:>8.1}µs",
+                t.elapsed().as_micros() as f64
+            );
         }
     }
 }
@@ -90,6 +93,9 @@ fn fulldoc_vs_viewport_render() {
         }
         let view = t2.elapsed().as_micros() as f64 / iters as f64;
 
-        println!("doc {n:5} lines: render()={full:9.1} µs  render_view()={view:9.1} µs  ratio {:.2}x", full / view);
+        println!(
+            "doc {n:5} lines: render()={full:9.1} µs  render_view()={view:9.1} µs  ratio {:.2}x",
+            full / view
+        );
     }
 }

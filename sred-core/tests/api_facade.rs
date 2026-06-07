@@ -9,12 +9,19 @@ fn facade_drives_edit_render_and_is_lossless() {
     // edit through the facade
     ed.apply(Command::SelectAll);
     ed.apply(Command::ToggleMark(MarkSet::BOLD));
-    assert!(ed.text().contains("**"), "edit went through: {:?}", ed.text());
+    assert!(
+        ed.text().contains("**"),
+        "edit went through: {:?}",
+        ed.text()
+    );
 
     // render produces a non-empty frame + a caret
     let out = ed.render(true);
     assert!(out.frame.width > 0 && out.frame.height > 0);
-    assert_eq!(out.frame.rgba.len(), (out.frame.width * out.frame.height * 4) as usize);
+    assert_eq!(
+        out.frame.rgba.len(),
+        (out.frame.width * out.frame.height * 4) as usize
+    );
     assert!(out.caret.h > 0.0);
 
     // set_text round-trips byte-for-byte
@@ -31,14 +38,20 @@ fn facade_click_moves_caret() {
     let near_start = ed.core_mut().cursor();
     ed.click(400.0, 10.0); // far right
     let near_end = ed.core_mut().cursor();
-    assert!(near_end >= near_start, "clicking right moves caret right or equal");
+    assert!(
+        near_end >= near_start,
+        "clicking right moves caret right or equal"
+    );
 }
 
 #[test]
 fn click_is_document_space_and_scroll_independent() {
     // A click at a fixed document-y must resolve to the same position whether or
     // not the view is scrolled (the host's Flickable reports document coords).
-    let body = (0..40).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    let body = (0..40)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut ed = Editor::from_source(&body, Format::Markdown);
     ed.set_viewport(400, 120.0); // small viewport → scrollable
     let _ = ed.render(true);
@@ -92,5 +105,8 @@ fn token_chip_background_is_painted() {
     });
     let out = ed.render(true);
     let painted = out.frame.rgba.chunks_exact(4).any(|p| p == bg);
-    assert!(painted, "registered token chip background should be painted in the frame");
+    assert!(
+        painted,
+        "registered token chip background should be painted in the frame"
+    );
 }

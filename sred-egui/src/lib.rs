@@ -24,11 +24,19 @@ pub struct SredWidget {
 
 impl SredWidget {
     pub fn new(format: Format) -> Self {
-        SredWidget { editor: Editor::new(format), tex: None, frag_texes: Vec::new() }
+        SredWidget {
+            editor: Editor::new(format),
+            tex: None,
+            frag_texes: Vec::new(),
+        }
     }
 
     pub fn from_source(src: &str, format: Format) -> Self {
-        SredWidget { editor: Editor::from_source(src, format), tex: None, frag_texes: Vec::new() }
+        SredWidget {
+            editor: Editor::from_source(src, format),
+            tex: None,
+            frag_texes: Vec::new(),
+        }
     }
 
     pub fn editor(&self) -> &Editor {
@@ -62,7 +70,12 @@ impl SredWidget {
                 }
                 true
             }
-            Event::Key { key, pressed: true, modifiers, .. } => self.apply_key(*key, *modifiers),
+            Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => self.apply_key(*key, *modifiers),
             _ => false,
         }
     }
@@ -72,16 +85,34 @@ impl SredWidget {
         let shift = mods.shift;
         let word = mods.ctrl || mods.alt; // word granularity
         let doc = mods.command; // ctrl (or ⌘ on macOS)
-        // Build a Move/Select command for a horizontal/doc motion.
+                                // Build a Move/Select command for a horizontal/doc motion.
         let go = |this: &mut Self, m: Motion| {
-            this.editor.apply(if shift { Command::Select(m) } else { Command::Move(m) });
+            this.editor.apply(if shift {
+                Command::Select(m)
+            } else {
+                Command::Move(m)
+            });
         };
         match key {
             Key::ArrowLeft => go(self, if word { Motion::WordLeft } else { Motion::Left }),
-            Key::ArrowRight => go(self, if word { Motion::WordRight } else { Motion::Right }),
+            Key::ArrowRight => go(
+                self,
+                if word {
+                    Motion::WordRight
+                } else {
+                    Motion::Right
+                },
+            ),
             Key::ArrowUp => self.editor.move_vertical(false),
             Key::ArrowDown => self.editor.move_vertical(true),
-            Key::Home => go(self, if doc { Motion::DocStart } else { Motion::LineStart }),
+            Key::Home => go(
+                self,
+                if doc {
+                    Motion::DocStart
+                } else {
+                    Motion::LineStart
+                },
+            ),
             Key::End => go(self, if doc { Motion::DocEnd } else { Motion::LineEnd }),
             Key::PageUp => self.editor.page(false),
             Key::PageDown => self.editor.page(true),
@@ -96,9 +127,11 @@ impl SredWidget {
                 Command::DeleteForward
             }),
             Key::Enter => self.editor.apply(Command::Insert("\n".into())),
-            Key::Tab => self
-                .editor
-                .apply(if shift { Command::Outdent } else { Command::Indent }),
+            Key::Tab => self.editor.apply(if shift {
+                Command::Outdent
+            } else {
+                Command::Indent
+            }),
             Key::A if doc => self.editor.apply(Command::SelectAll),
             Key::Z if doc => self
                 .editor
@@ -115,8 +148,7 @@ impl SredWidget {
         self.editor
             .set_viewport(avail.x.max(1.0) as u32, avail.y.max(1.0));
 
-        let (rect, response) =
-            ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
+        let (rect, response) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
         let focused = response.has_focus();
 
         // Keyboard / IME / clipboard events (only while focused).
@@ -196,7 +228,9 @@ impl SredWidget {
                         [img.width as usize, img.height as usize],
                         &img.rgba,
                     );
-                    let tex = ui.ctx().load_texture("sred-frag", cimg, egui::TextureOptions::LINEAR);
+                    let tex =
+                        ui.ctx()
+                            .load_texture("sred-frag", cimg, egui::TextureOptions::LINEAR);
                     let size = egui::vec2(img.width as f32, img.height as f32);
                     for r in self.editor.rect_for_range(frag.start, frag.end) {
                         let at = egui::Rect::from_min_size(rect.min + egui::vec2(r.x, r.y), size);
@@ -236,7 +270,13 @@ mod tests {
     use egui::{Event, ImeEvent, Key, Modifiers};
 
     fn key(k: Key, mods: Modifiers) -> Event {
-        Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: mods }
+        Event::Key {
+            key: k,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: mods,
+        }
     }
 
     #[test]
@@ -260,7 +300,10 @@ mod tests {
     fn word_motion_and_delete_via_keys() {
         let mut w = SredWidget::from_source("alpha beta", Format::Markdown);
         w.editor_mut().core_mut().set_cursor(0);
-        let ctrl = Modifiers { ctrl: true, ..Default::default() };
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
         w.apply_event(&key(Key::ArrowRight, ctrl)); // word-right past "alpha"
         assert_eq!(w.editor_mut().core_mut().cursor(), 5);
         w.apply_event(&key(Key::Delete, ctrl)); // delete " beta" word
@@ -270,7 +313,10 @@ mod tests {
     #[test]
     fn select_all_and_undo_via_command_modifier() {
         let mut w = SredWidget::from_source("hello", Format::Markdown);
-        let cmd = Modifiers { command: true, ..Default::default() };
+        let cmd = Modifiers {
+            command: true,
+            ..Default::default()
+        };
         w.apply_event(&key(Key::A, cmd));
         assert_eq!(w.editor().selected_text(), "hello");
         w.apply_event(&Event::Text("x".into())); // replaces selection

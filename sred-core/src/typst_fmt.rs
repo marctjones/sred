@@ -170,7 +170,11 @@ fn parse_heading(node: &SyntaxNode) -> (u8, Vec<Inline>) {
     for child in node.children() {
         match child.kind() {
             SyntaxKind::HeadingMarker => {
-                level = node_text(child).chars().filter(|c| *c == '=').count().max(1) as u8;
+                level = node_text(child)
+                    .chars()
+                    .filter(|c| *c == '=')
+                    .count()
+                    .max(1) as u8;
             }
             _ => {
                 if let Some(inl) = parse_inline(child) {
@@ -264,7 +268,7 @@ fn write_block(b: &Block, out: &mut String) {
         Block::List(list) => {
             for (i, item) in list.items.iter().enumerate() {
                 if list.ordered {
-                    out.push_str(&format!("+ "));
+                    out.push_str("+ ");
                     let _ = i;
                 } else {
                     out.push_str("- ");

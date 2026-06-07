@@ -12,17 +12,38 @@ fn ed(src: &str) -> Editor {
 #[test]
 fn find_all_basic_and_case() {
     let e = ed("Cat cat CAT");
-    let ci = SearchOpts { case_sensitive: false, whole_word: false };
-    assert_eq!(e.find("cat", ci).len(), 3, "case-insensitive finds all three");
-    let cs = SearchOpts { case_sensitive: true, whole_word: false };
-    assert_eq!(e.find("cat", cs), vec![(4, 7)], "case-sensitive finds only the lowercase one");
+    let ci = SearchOpts {
+        case_sensitive: false,
+        whole_word: false,
+    };
+    assert_eq!(
+        e.find("cat", ci).len(),
+        3,
+        "case-insensitive finds all three"
+    );
+    let cs = SearchOpts {
+        case_sensitive: true,
+        whole_word: false,
+    };
+    assert_eq!(
+        e.find("cat", cs),
+        vec![(4, 7)],
+        "case-sensitive finds only the lowercase one"
+    );
 }
 
 #[test]
 fn find_whole_word_only() {
     let e = ed("cat category cat");
-    let ww = SearchOpts { case_sensitive: false, whole_word: true };
-    assert_eq!(e.find("cat", ww), vec![(0, 3), (13, 16)], "skips 'category'");
+    let ww = SearchOpts {
+        case_sensitive: false,
+        whole_word: true,
+    };
+    assert_eq!(
+        e.find("cat", ww),
+        vec![(0, 3), (13, 16)],
+        "skips 'category'"
+    );
 }
 
 #[test]
@@ -32,7 +53,11 @@ fn replace_all_is_single_lossless_edit() {
     assert_eq!(n, 2);
     assert_eq!(e.text(), "a X b X c");
     e.apply(Command::Undo);
-    assert_eq!(e.text(), "a foo b foo c", "one undo reverts all replacements");
+    assert_eq!(
+        e.text(),
+        "a foo b foo c",
+        "one undo reverts all replacements"
+    );
 }
 
 #[test]
@@ -41,7 +66,11 @@ fn find_next_wraps() {
     let o = SearchOpts::default();
     assert_eq!(e.core_mut().find_next(1, "x", o), Some((3, 4)));
     assert_eq!(e.core_mut().find_next(5, "x", o), Some((6, 7)));
-    assert_eq!(e.core_mut().find_next(7, "x", o), Some((0, 1)), "wraps to the top");
+    assert_eq!(
+        e.core_mut().find_next(7, "x", o),
+        Some((0, 1)),
+        "wraps to the top"
+    );
 }
 
 // ---- multiple cursors ------------------------------------------------------
@@ -75,7 +104,10 @@ fn motion_collapses_multi_carets() {
     e.core_mut().set_cursor(0);
     e.add_caret(2);
     e.apply(Command::Move(Motion::Right));
-    assert!(!e.core_mut().has_multi_carets(), "a motion collapses to the primary caret");
+    assert!(
+        !e.core_mut().has_multi_carets(),
+        "a motion collapses to the primary caret"
+    );
 }
 
 // ---- auto-pairs ------------------------------------------------------------
@@ -85,7 +117,11 @@ fn auto_pair_inserts_closer_and_caret_inside() {
     let mut e = ed("");
     e.apply(Command::Insert("(".into()));
     assert_eq!(e.text(), "()");
-    assert_eq!(e.core_mut().cursor(), 1, "caret sits between the delimiters");
+    assert_eq!(
+        e.core_mut().cursor(),
+        1,
+        "caret sits between the delimiters"
+    );
     // typing the matching closer steps over it instead of duplicating
     e.apply(Command::Insert(")".into()));
     assert_eq!(e.text(), "()");

@@ -18,7 +18,7 @@ fn render(src: &str, caret: usize) -> (Vec<String>, Vec<i32>, Vec<Span>) {
 }
 
 /// Marks covering the (first) span whose text contains `needle`.
-fn marks_of<'a>(spans: &'a [Span], needle: &str) -> MarkSet {
+fn marks_of(spans: &[Span], needle: &str) -> MarkSet {
     spans
         .iter()
         .find(|s| s.text.contains(needle))
@@ -37,8 +37,15 @@ fn setext_heading_styles_title_and_hides_underline() {
     assert_eq!(deltas[1], -3, "hidden '===' → delta −3");
     // The title is heading-styled (scaled above the 16.0 base + bold).
     let title = spans.iter().find(|s| s.text.contains("Title")).unwrap();
-    assert!(title.size > 16.0, "setext title should scale up, got {}", title.size);
-    assert!(title.marks.contains(MarkSet::BOLD), "setext title should be bold");
+    assert!(
+        title.size > 16.0,
+        "setext title should scale up, got {}",
+        title.size
+    );
+    assert!(
+        title.marks.contains(MarkSet::BOLD),
+        "setext title should be bold"
+    );
 }
 
 #[test]
@@ -110,7 +117,9 @@ fn reference_link_resolves_against_definition() {
     let src = "see [text][ref] here\n\n[ref]: https://example.com\n";
     let (_, _, spans) = render(src, 4);
     assert!(
-        spans.iter().any(|s| s.text.contains("text") && s.marks.contains(MarkSet::LINK)),
+        spans
+            .iter()
+            .any(|s| s.text.contains("text") && s.marks.contains(MarkSet::LINK)),
         "reference link text should carry the LINK mark"
     );
 }
@@ -120,7 +129,9 @@ fn collapsed_reference_link_resolves() {
     let src = "see [ref] here\n\n[ref]: https://example.com\n";
     let (_, _, spans) = render(src, 4);
     assert!(
-        spans.iter().any(|s| s.text.contains("ref") && s.marks.contains(MarkSet::LINK)),
+        spans
+            .iter()
+            .any(|s| s.text.contains("ref") && s.marks.contains(MarkSet::LINK)),
         "collapsed reference link should carry the LINK mark"
     );
 }
@@ -131,11 +142,16 @@ fn gfm_table_bolds_header_and_codes_pipes() {
     let (disp, deltas, spans) = render(src, 9);
     // Source kept verbatim (no marker hiding anywhere in the table).
     assert_eq!(disp[0], "| a | b |");
-    assert_eq!(deltas.iter().all(|&d| d == 0), true, "tables keep source → all deltas 0");
+    assert!(deltas.iter().all(|&d| d == 0), "tables keep source → all deltas 0");
     // Header cell text is bold; pipe separators are code-marked.
-    assert!(marks_of(&spans, "a").contains(MarkSet::BOLD), "header cell bold");
     assert!(
-        spans.iter().any(|s| s.text.contains('|') && s.marks.contains(MarkSet::CODE)),
+        marks_of(&spans, "a").contains(MarkSet::BOLD),
+        "header cell bold"
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|s| s.text.contains('|') && s.marks.contains(MarkSet::CODE)),
         "table pipes should be code-marked"
     );
 }
@@ -145,7 +161,10 @@ fn nested_bullet_preserves_indentation() {
     let src = "- top\n  - nested\n";
     let (disp, deltas, _) = render(src, 0); // caret on line 0, line 1 projects
     assert_eq!(disp[1], "  • nested", "indentation kept; '- ' → '• '");
-    assert_eq!(deltas[1], 2, "'- ' (2 bytes) → '• ' (4 bytes) ⇒ +2, indent unaffected");
+    assert_eq!(
+        deltas[1], 2,
+        "'- ' (2 bytes) → '• ' (4 bytes) ⇒ +2, indent unaffected"
+    );
 }
 
 #[test]
@@ -177,6 +196,9 @@ fn block_constructs_round_trip_byte_lossless() {
     for caret in 0..nlines {
         let (disp, _, _) = render(src, caret);
         let line = src.split('\n').nth(caret).unwrap();
-        assert_eq!(disp[caret], line, "caret line {caret} must show source verbatim");
+        assert_eq!(
+            disp[caret], line,
+            "caret line {caret} must show source verbatim"
+        );
     }
 }

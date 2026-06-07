@@ -25,7 +25,10 @@ fn heading_depth_from_marker_run() {
     // Level 1 scales larger than level 3.
     let h1 = spans.iter().find(|s| s.text.contains("H1")).unwrap().size;
     let h3 = spans.iter().find(|s| s.text.contains("H3")).unwrap().size;
-    assert!(h1 > h3 && h3 > 16.0, "deeper heading is smaller but still > base ({h1} vs {h3})");
+    assert!(
+        h1 > h3 && h3 > 16.0,
+        "deeper heading is smaller but still > base ({h1} vs {h3})"
+    );
 }
 
 #[test]
@@ -66,7 +69,10 @@ fn enum_marker_stays_visible() {
 fn term_list_hides_marker() {
     let src = "para\n/ Term: definition\n";
     let (disp, deltas, _) = render(src, 0);
-    assert_eq!(disp[1], "Term: definition", "'/ ' term marker hidden off-caret");
+    assert_eq!(
+        disp[1], "Term: definition",
+        "'/ ' term marker hidden off-caret"
+    );
     assert_eq!(deltas[1], -2);
 }
 
@@ -76,7 +82,9 @@ fn inline_marks_still_apply_via_tree() {
     let src = "para\n= A *strong* title\n";
     let (_, _, spans) = render(src, 1); // caret on heading line (revealed)
     assert!(
-        spans.iter().any(|s| s.text.contains("strong") && s.marks.contains(MarkSet::BOLD)),
+        spans
+            .iter()
+            .any(|s| s.text.contains("strong") && s.marks.contains(MarkSet::BOLD)),
         "strong inside a heading should still be bold"
     );
 }
@@ -88,10 +96,27 @@ fn code_mode_tokens_get_distinct_syntax_colors() {
     use sred_core::view::SynPalette;
     let p = SynPalette::DEFAULT;
     let (spans, _) = view::styled_runs("#let f(x) = 1", Format::Typst, 16.0, 0, &[], 0);
-    let color_of = |needle: &str| spans.iter().find(|s| s.text.contains(needle)).and_then(|s| s.color);
-    assert_eq!(color_of("let"), Some(p.keyword), "`let` should use the keyword color");
-    assert_eq!(color_of("f"), Some(p.function), "function name should use the function color");
-    assert_eq!(color_of("1"), Some(p.number), "number literal should use the number color");
+    let color_of = |needle: &str| {
+        spans
+            .iter()
+            .find(|s| s.text.contains(needle))
+            .and_then(|s| s.color)
+    };
+    assert_eq!(
+        color_of("let"),
+        Some(p.keyword),
+        "`let` should use the keyword color"
+    );
+    assert_eq!(
+        color_of("f"),
+        Some(p.function),
+        "function name should use the function color"
+    );
+    assert_eq!(
+        color_of("1"),
+        Some(p.number),
+        "number literal should use the number color"
+    );
     // The three categories are visibly different.
     assert!(p.keyword != p.function && p.function != p.number && p.keyword != p.number);
 }
@@ -99,9 +124,18 @@ fn code_mode_tokens_get_distinct_syntax_colors() {
 #[test]
 fn markdown_prose_has_no_syntax_colors() {
     // Step D colours Typst code-mode only; markdown prose stays uncolored.
-    let (spans, _) =
-        view::styled_runs("a plain paragraph of text", Format::Markdown, 16.0, 0, &[], 0);
-    assert!(spans.iter().all(|s| s.color.is_none()), "markdown prose carries no syntax color");
+    let (spans, _) = view::styled_runs(
+        "a plain paragraph of text",
+        Format::Markdown,
+        16.0,
+        0,
+        &[],
+        0,
+    );
+    assert!(
+        spans.iter().all(|s| s.color.is_none()),
+        "markdown prose carries no syntax color"
+    );
 }
 
 #[test]
@@ -111,7 +145,9 @@ fn host_palette_overrides_syntax_colors() {
     p.keyword = [1, 2, 3, 255];
     let (spans, _) = styled_runs_with("#let x = 1", Format::Typst, 16.0, 0, &[], 0, &p);
     assert!(
-        spans.iter().any(|s| s.text.contains("let") && s.color == Some([1, 2, 3, 255])),
+        spans
+            .iter()
+            .any(|s| s.text.contains("let") && s.color == Some([1, 2, 3, 255])),
         "a host palette should override the keyword color"
     );
 }
@@ -123,6 +159,9 @@ fn typst_blocks_round_trip_byte_lossless() {
     for caret in 0..nlines {
         let (disp, _, _) = render(src, caret);
         let line = src.split('\n').nth(caret).unwrap();
-        assert_eq!(disp[caret], line, "caret line {caret} must show source verbatim");
+        assert_eq!(
+            disp[caret], line,
+            "caret line {caret} must show source verbatim"
+        );
     }
 }

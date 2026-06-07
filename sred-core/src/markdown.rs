@@ -2,9 +2,7 @@
 //! `pulldown-cmark`, and a direct model→Markdown serializer for exact output
 //! control.
 
-use pulldown_cmark::{
-    CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
-};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::format::{Caps, DocumentFormat, FormatError};
 use crate::model::{Block, Document, Format, Inline, List, MarkSet};

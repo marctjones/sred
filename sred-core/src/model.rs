@@ -22,6 +22,9 @@ impl Format {
         }
     }
 
+    // Returns `Option` (not the `FromStr` trait) so unknown formats are a `None`,
+    // not an error type — the call sites want the option.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "markdown" | "md" => Some(Format::Markdown),
@@ -58,14 +61,23 @@ pub struct Document {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     Paragraph(Vec<Inline>),
-    Heading { level: u8, content: Vec<Inline> },
+    Heading {
+        level: u8,
+        content: Vec<Inline>,
+    },
     List(List),
-    CodeBlock { lang: Option<String>, code: String },
+    CodeBlock {
+        lang: Option<String>,
+        code: String,
+    },
     BlockQuote(Vec<Block>),
     ThematicBreak,
     /// Format-specific block we can preserve but not structurally edit
     /// (e.g. a Typst `#figure(...)` call, or an HTML block in Markdown).
-    Raw { format: Format, src: String },
+    Raw {
+        format: Format,
+        src: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -86,9 +98,18 @@ pub enum Inline {
         content: Vec<Inline>,
     },
     LineBreak,
-    Image { src: String, alt: String },
-    Math { display: bool, src: String },
-    Raw { format: Format, src: String },
+    Image {
+        src: String,
+        alt: String,
+    },
+    Math {
+        display: bool,
+        src: String,
+    },
+    Raw {
+        format: Format,
+        src: String,
+    },
 }
 
 impl Document {

@@ -217,7 +217,9 @@ fn build_window(initial: &str, format: Format) -> Result<MainWindow, slint::Plat
                         let (spans, pb) = c.core.styled_runs(theme.font_size);
                         let text = c.core.text();
                         let cur = c.core.cursor();
-                        let idx = c.renderer.vertical(&spans, &text, &pb, width, &theme, cur, down);
+                        let idx = c
+                            .renderer
+                            .vertical(&spans, &text, &pb, width, &theme, cur, down);
                         c.core.set_cursor(idx);
                     }
                     other => {
@@ -436,7 +438,11 @@ fn refresh(window: &MainWindow, ctl: &Rc<RefCell<Controller>>, follow: bool) {
             .caret_rects(&spans, &text, &prefix_bytes, width, &theme, &offsets);
         let boxes: Vec<CaretBox> = rects
             .iter()
-            .map(|r| CaretBox { x: r.x, y: r.y - out.scroll_y, h: r.h })
+            .map(|r| CaretBox {
+                x: r.x,
+                y: r.y - out.scroll_y,
+                h: r.h,
+            })
             .collect();
         window.set_carets(slint::ModelRc::new(slint::VecModel::from(boxes)));
     } else {
@@ -511,12 +517,20 @@ mod tests {
         let mut c = controller("Title");
         c.core.apply(Command::SelectAll);
         run_named(&mut c, "h2");
-        assert!(c.core.source().starts_with("## Title"), "got: {}", c.core.source());
+        assert!(
+            c.core.source().starts_with("## Title"),
+            "got: {}",
+            c.core.source()
+        );
 
         let mut c = controller("item");
         c.core.apply(Command::SelectAll);
         run_named(&mut c, "bullet");
-        assert!(c.core.source().contains("- item"), "got: {}", c.core.source());
+        assert!(
+            c.core.source().contains("- item"),
+            "got: {}",
+            c.core.source()
+        );
     }
 
     #[test]
@@ -526,9 +540,17 @@ mod tests {
         run_named(&mut c, "bold");
         assert!(c.core.source().contains("**x**"));
         run_named(&mut c, "undo");
-        assert!(!c.core.source().contains("**x**"), "undo failed: {}", c.core.source());
+        assert!(
+            !c.core.source().contains("**x**"),
+            "undo failed: {}",
+            c.core.source()
+        );
         run_named(&mut c, "redo");
-        assert!(c.core.source().contains("**x**"), "redo failed: {}", c.core.source());
+        assert!(
+            c.core.source().contains("**x**"),
+            "redo failed: {}",
+            c.core.source()
+        );
     }
 
     #[test]

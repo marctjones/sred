@@ -24,7 +24,10 @@ fn render(src: &str, caret: usize) -> (Vec<String>, Vec<i32>) {
 fn nested_bullet_renders_with_indent() {
     let src = "- top\n  - sub\n";
     let (disp, deltas) = render(src, 0); // caret on line 0; line 1 projects
-    assert_eq!(disp[1], "  • sub", "indented bullet keeps indent, '- ' → '• '");
+    assert_eq!(
+        disp[1], "  • sub",
+        "indented bullet keeps indent, '- ' → '• '"
+    );
     assert_eq!(deltas[1], 2);
 }
 
@@ -33,7 +36,10 @@ fn nested_ordered_keeps_indent_and_number() {
     let src = "1. first\n   1. sub\n2. second\n";
     let (disp, deltas) = render(src, 0);
     // Ordered markers carry meaning → kept visible; indentation preserved.
-    assert_eq!(disp[1], "   1. sub", "nested numbered item rendered with its indent + number");
+    assert_eq!(
+        disp[1], "   1. sub",
+        "nested numbered item rendered with its indent + number"
+    );
     assert_eq!(deltas[1], 0);
     assert_eq!(disp[2], "2. second");
 }
@@ -45,7 +51,11 @@ fn indent_nests_a_list_item() {
     let mut e = ed("- a\n- b\n");
     e.core_mut().set_cursor(5); // on the second line
     e.apply(Command::Indent);
-    assert_eq!(e.text(), "- a\n  - b\n", "Tab indents the line by one level");
+    assert_eq!(
+        e.text(),
+        "- a\n  - b\n",
+        "Tab indents the line by one level"
+    );
     e.apply(Command::Outdent);
     assert_eq!(e.text(), "- a\n- b\n", "Shift+Tab outdents it back");
 }
@@ -67,7 +77,11 @@ fn indent_applies_to_all_selected_lines() {
         e.apply(Command::Select(sred_core::editor::Motion::Right));
     }
     e.apply(Command::Indent);
-    assert_eq!(e.text(), "  a\n  b\nc\n", "both touched lines indented; one undo reverts");
+    assert_eq!(
+        e.text(),
+        "  a\n  b\nc\n",
+        "both touched lines indented; one undo reverts"
+    );
     e.apply(Command::Undo);
     assert_eq!(e.text(), "a\nb\nc\n");
 }

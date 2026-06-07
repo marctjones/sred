@@ -142,10 +142,18 @@ struct Marker {
 
 impl Marker {
     /// No hideable marker (paragraphs, numbered lists, code interiors, tables).
-    const NONE: Marker = Marker { start: 0, len: 0, repl: "" };
+    const NONE: Marker = Marker {
+        start: 0,
+        len: 0,
+        repl: "",
+    };
     /// A leading marker (no indentation) of `len` bytes shown as `repl` when hidden.
     fn lead(len: usize, repl: &'static str) -> Marker {
-        Marker { start: 0, len, repl }
+        Marker {
+            start: 0,
+            len,
+            repl,
+        }
     }
 }
 
@@ -210,7 +218,16 @@ impl LineInfo {
             s.hash(&mut h);
         }
         let digest = h.finish();
-        LineInfo { marker, scale, extra, is_code, inline, colors, syn, digest }
+        LineInfo {
+            marker,
+            scale,
+            extra,
+            is_code,
+            inline,
+            colors,
+            syn,
+            digest,
+        }
     }
 }
 
@@ -250,7 +267,14 @@ fn project_key(digest: u64, on_caret: bool, base: f32, tokens_gen: u64, syn: &Sy
     on_caret.hash(&mut h);
     base.to_bits().hash(&mut h);
     tokens_gen.hash(&mut h);
-    for c in [syn.keyword, syn.function, syn.number, syn.string, syn.comment, syn.operator] {
+    for c in [
+        syn.keyword,
+        syn.function,
+        syn.number,
+        syn.string,
+        syn.comment,
+        syn.operator,
+    ] {
         c.hash(&mut h);
     }
     h.finish()
@@ -304,9 +328,22 @@ fn analyze(text: &str, format: Format) -> DocAnalysis {
             // Fence delimiter hides fully off-caret (marker = whole line); an
             // interior line is always shown (no marker).
             let n = line.chars().count();
-            let marker = if is_fence[li] { Marker::lead(line.len(), "") } else { Marker::NONE };
+            let marker = if is_fence[li] {
+                Marker::lead(line.len(), "")
+            } else {
+                Marker::NONE
+            };
             let colors = line_code_colors(highlights.get(&li), n);
-            LineInfo::new(line, marker, 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], colors, vec![None; n])
+            LineInfo::new(
+                line,
+                marker,
+                1.0,
+                MarkSet::CODE,
+                true,
+                vec![MarkSet::empty(); n],
+                colors,
+                vec![None; n],
+            )
         } else if let Some(md) = &md {
             analyze_prose_md(line, &md[li])
         } else if let Some(typ) = &typ {
@@ -328,10 +365,28 @@ fn analyze_prose_md(line: &str, f: &MdLineFacts) -> LineInfo {
     if f.setext_underline {
         // The `===` / `---` line: hide it fully off-caret (it only existed to mark
         // the line above as a heading); show it verbatim on the caret line.
-        return LineInfo::new(line, Marker::lead(line.len(), ""), 1.0, MarkSet::empty(), false, vec![MarkSet::empty(); n], vec![None; n], vec![None; n]);
+        return LineInfo::new(
+            line,
+            Marker::lead(line.len(), ""),
+            1.0,
+            MarkSet::empty(),
+            false,
+            vec![MarkSet::empty(); n],
+            vec![None; n],
+            vec![None; n],
+        );
     }
     if f.indented_code {
-        return LineInfo::new(line, Marker::NONE, 1.0, MarkSet::CODE, true, vec![MarkSet::empty(); n], vec![None; n], vec![None; n]);
+        return LineInfo::new(
+            line,
+            Marker::NONE,
+            1.0,
+            MarkSet::CODE,
+            true,
+            vec![MarkSet::empty(); n],
+            vec![None; n],
+            vec![None; n],
+        );
     }
     let (marker, scale, extra) = if let Some(level) = f.setext_level {
         // Setext title: the text stays (no marker), but scales up + bolds.
@@ -341,12 +396,30 @@ fn analyze_prose_md(line: &str, f: &MdLineFacts) -> LineInfo {
     };
     // Markdown prose carries no per-token syntax colors (code blocks colour via
     // syntect in `colors`); only Typst code-mode does.
-    LineInfo::new(line, marker, scale, extra, false, f.inline.clone(), vec![None; n], vec![None; n])
+    LineInfo::new(
+        line,
+        marker,
+        scale,
+        extra,
+        false,
+        f.inline.clone(),
+        vec![None; n],
+        vec![None; n],
+    )
 }
 
 fn analyze_prose_typst(line: &str, f: &TypstLineFacts) -> LineInfo {
     let n = line.chars().count();
-    LineInfo::new(line, f.marker, f.scale, f.extra, false, f.inline.clone(), vec![None; n], f.syn.clone())
+    LineInfo::new(
+        line,
+        f.marker,
+        f.scale,
+        f.extra,
+        false,
+        f.inline.clone(),
+        vec![None; n],
+        f.syn.clone(),
+    )
 }
 
 /// Per-line output of the whole-document Typst scan ([`scan_typst`]).
@@ -401,7 +474,14 @@ fn scan_typst(text: &str, lines: &[&str]) -> Vec<TypstLineFacts> {
 
     let bytes = text.as_bytes();
     let root = parse(text);
-    walk_typst(&LinkedNode::new(&root), text, bytes, &starts, &line_of, &mut facts);
+    walk_typst(
+        &LinkedNode::new(&root),
+        text,
+        bytes,
+        &starts,
+        &line_of,
+        &mut facts,
+    );
     facts
 }
 
@@ -419,25 +499,43 @@ fn walk_typst(
     let k = node.kind();
     if matches!(
         k,
-        SyntaxKind::HeadingMarker | SyntaxKind::ListMarker | SyntaxKind::EnumMarker | SyntaxKind::TermMarker
+        SyntaxKind::HeadingMarker
+            | SyntaxKind::ListMarker
+            | SyntaxKind::EnumMarker
+            | SyntaxKind::TermMarker
     ) {
         let li = line_of(r.start);
         let col = r.start - starts[li];
         // Only the first marker on a line is the block marker (outer of nested).
-        if facts[li].marker.len == 0 && facts[li].extra.is_empty() && col_is_leading(text, starts[li], r.start) {
+        if facts[li].marker.len == 0
+            && facts[li].extra.is_empty()
+            && col_is_leading(text, starts[li], r.start)
+        {
             let mlen = r.end - r.start;
             let space = usize::from(bytes.get(r.end) == Some(&b' '));
             match k {
                 SyntaxKind::HeadingMarker => {
-                    facts[li].marker = Marker { start: col, len: mlen + space, repl: "" };
+                    facts[li].marker = Marker {
+                        start: col,
+                        len: mlen + space,
+                        repl: "",
+                    };
                     facts[li].scale = heading_scale(mlen);
                     facts[li].extra = MarkSet::BOLD;
                 }
                 SyntaxKind::ListMarker => {
-                    facts[li].marker = Marker { start: col, len: mlen + space, repl: BULLET };
+                    facts[li].marker = Marker {
+                        start: col,
+                        len: mlen + space,
+                        repl: BULLET,
+                    };
                 }
                 SyntaxKind::TermMarker => {
-                    facts[li].marker = Marker { start: col, len: mlen + space, repl: "" };
+                    facts[li].marker = Marker {
+                        start: col,
+                        len: mlen + space,
+                        repl: "",
+                    };
                 }
                 // Enum `+ ` markers carry auto-numbering meaning → kept visible.
                 _ => {}
@@ -585,7 +683,8 @@ fn scan_md(text: &str, lines: &[&str], is_fence: &[bool], interior: &[bool]) -> 
                     }
                 }
             }
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)) | Event::Start(Tag::HtmlBlock) => {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Indented))
+            | Event::Start(Tag::HtmlBlock) => {
                 // Indented code and raw HTML blocks both render as code (source
                 // kept, no marker hiding → delta 0).
                 let l0 = line_of(r.start);
@@ -698,7 +797,11 @@ fn project_line(
     if !info.is_code && !tokens.is_empty() {
         for spec in tokens {
             for m in (spec.matcher)(&display) {
-                for slot in colors.iter_mut().take(m.end.min(disp_n)).skip(m.start.min(disp_n)) {
+                for slot in colors
+                    .iter_mut()
+                    .take(m.end.min(disp_n))
+                    .skip(m.start.min(disp_n))
+                {
                     *slot = Some(spec.fg);
                 }
             }
@@ -715,7 +818,12 @@ fn project_line(
         while j < disp_n && marks[j] == mk && colors[j] == col {
             j += 1;
         }
-        out.push(Span { text: chars[start..j].iter().collect(), marks: mk, color: col, size });
+        out.push(Span {
+            text: chars[start..j].iter().collect(),
+            marks: mk,
+            color: col,
+            size,
+        });
     }
     (out, delta)
 }
@@ -755,7 +863,15 @@ pub fn styled_runs(
     tokens: &[TokenSpec],
     tokens_gen: u64,
 ) -> (Vec<Span>, Vec<i32>) {
-    styled_runs_with(text, format, base, caret_line, tokens, tokens_gen, &SynPalette::DEFAULT)
+    styled_runs_with(
+        text,
+        format,
+        base,
+        caret_line,
+        tokens,
+        tokens_gen,
+        &SynPalette::DEFAULT,
+    )
 }
 
 /// As [`styled_runs`], but with a host-supplied [`SynPalette`] for per-token
@@ -787,7 +903,8 @@ pub fn styled_runs_with(
             });
         }
         let on_caret = li == caret_line;
-        let (line_spans, delta) = project_cached(info, line, on_caret, base, tokens, tokens_gen, palette);
+        let (line_spans, delta) =
+            project_cached(info, line, on_caret, base, tokens, tokens_gen, palette);
         deltas.push(delta);
         spans.extend(line_spans);
     }
@@ -826,12 +943,28 @@ fn classify_block_md(line: &str) -> (Marker, f32, MarkSet) {
     // ATX heading (CommonMark allows up to 3 leading spaces).
     let hashes = body.chars().take_while(|c| *c == '#').count();
     if indent <= 3 && (1..=6).contains(&hashes) && body[hashes..].starts_with(' ') {
-        return (Marker::lead(indent + hashes + 1, ""), heading_scale(hashes), MarkSet::BOLD);
+        return (
+            Marker::lead(indent + hashes + 1, ""),
+            heading_scale(hashes),
+            MarkSet::BOLD,
+        );
     }
     // Task-list items (must be checked before the plain bullet, which is a prefix).
-    for (mk, repl) in [("- [ ] ", TASK_OPEN), ("- [x] ", TASK_DONE), ("- [X] ", TASK_DONE)] {
+    for (mk, repl) in [
+        ("- [ ] ", TASK_OPEN),
+        ("- [x] ", TASK_DONE),
+        ("- [X] ", TASK_DONE),
+    ] {
         if body.starts_with(mk) {
-            return (Marker { start: indent, len: mk.len(), repl }, 1.0, MarkSet::empty());
+            return (
+                Marker {
+                    start: indent,
+                    len: mk.len(),
+                    repl,
+                },
+                1.0,
+                MarkSet::empty(),
+            );
         }
     }
     // Block quote(s): hide the whole leading `> ` run (collapses nested quotes).
@@ -840,12 +973,28 @@ fn classify_block_md(line: &str) -> (Marker, f32, MarkSet) {
         while body[len..].starts_with("> ") {
             len += 2;
         }
-        return (Marker { start: indent, len, repl: "" }, 1.0, MarkSet::empty());
+        return (
+            Marker {
+                start: indent,
+                len,
+                repl: "",
+            },
+            1.0,
+            MarkSet::empty(),
+        );
     }
     // Unordered list item.
     for marker in ["- ", "* ", "+ "] {
         if body.starts_with(marker) {
-            return (Marker { start: indent, len: 2, repl: BULLET }, 1.0, MarkSet::empty());
+            return (
+                Marker {
+                    start: indent,
+                    len: 2,
+                    repl: BULLET,
+                },
+                1.0,
+                MarkSet::empty(),
+            );
         }
     }
     let digits = body.chars().take_while(|c| c.is_ascii_digit()).count();
@@ -949,10 +1098,7 @@ pub fn link_at(text: &str, cursor: usize) -> Option<(Range<usize>, String)> {
             let local = cursor - global;
             for lk in links_in_line(line) {
                 if local >= lk.start && local <= lk.end {
-                    return Some((
-                        (global + lk.url_start)..(global + lk.url_end),
-                        lk.url,
-                    ));
+                    return Some(((global + lk.url_start)..(global + lk.url_end), lk.url));
                 }
             }
         }
@@ -1013,7 +1159,10 @@ fn math_fragments_typst(text: &str) -> Vec<MathFragment> {
     use typst_syntax::{ast, parse, SyntaxKind, SyntaxNode};
     fn walk(node: &SyntaxNode, off: usize, text: &str, out: &mut Vec<MathFragment>) {
         if node.kind() == SyntaxKind::Equation {
-            let display = node.cast::<ast::Equation>().map(|e| e.block()).unwrap_or(false);
+            let display = node
+                .cast::<ast::Equation>()
+                .map(|e| e.block())
+                .unwrap_or(false);
             let end = off + node.len();
             out.push(MathFragment {
                 start: byte_to_char(text, off),
@@ -1078,7 +1227,10 @@ fn line_marks_md(line: &str) -> Vec<MarkSet> {
             Event::Code(_) => MarkSet::CODE,
             _ => continue,
         };
-        let (cs, ce) = (b2c[range.start.min(line.len())], b2c[range.end.min(line.len())]);
+        let (cs, ce) = (
+            b2c[range.start.min(line.len())],
+            b2c[range.end.min(line.len())],
+        );
         for slot in marks.iter_mut().take(ce.min(n)).skip(cs) {
             slot.insert(bit);
         }
@@ -1156,7 +1308,12 @@ fn typst_syn_cat(node: &typst_syntax::LinkedNode) -> Option<SynCat> {
     }
 }
 
-fn typst_marks_walk(node: &typst_syntax::LinkedNode, b2c: &[usize], n: usize, marks: &mut [MarkSet]) {
+fn typst_marks_walk(
+    node: &typst_syntax::LinkedNode,
+    b2c: &[usize],
+    n: usize,
+    marks: &mut [MarkSet],
+) {
     if let Some(bit) = typst_inline_bit(node) {
         let r = node.range();
         let cs = *b2c.get(r.start).unwrap_or(&n);
