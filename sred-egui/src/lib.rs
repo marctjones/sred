@@ -232,8 +232,11 @@ impl SredWidget {
                     let tex =
                         ui.ctx()
                             .load_texture("sred-frag", cimg, egui::TextureOptions::LINEAR);
-                    let size = egui::vec2(img.width as f32, img.height as f32);
+                    let aspect = img.width as f32 / img.height.max(1) as f32;
                     for r in self.editor.rect_for_range(frag.start, frag.end) {
+                        // Scale the rendered image to the span height (preserving
+                        // aspect), so any `pixel_per_pt` displays at the text size.
+                        let size = egui::vec2(r.h * aspect, r.h);
                         let at = egui::Rect::from_min_size(rect.min + egui::vec2(r.x, r.y), size);
                         painter.image(tex.id(), at, uv, egui::Color32::WHITE);
                     }

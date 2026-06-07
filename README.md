@@ -31,6 +31,7 @@ surface.
 | `sred-core`  | UI-free editor core: model, backends, editing engine, cosmic-text raster |
 | `sred-slint` | the reusable `RichTextEditor` Slint component + Rust controller |
 | `sred-egui`  | egui host adapter (`SredWidget`) — depends only on `sred-core` |
+| `sred-typst` | optional: native Typst math/figure renderer for the fragment hook |
 | `sred-demo`  | runnable demo app embedding the component |
 
 ```
@@ -118,8 +119,9 @@ manual via `cargo run -p sred-demo`.
 - [x] **0.7.0** — rendered math/figure fragments (detection + host renderer hook +
       overlay geometry; end-to-end in the egui adapter), multi-cursor rendering,
       list indent/outdent, Slint relayout fix + accessibility shadow
-- [x] **0.7.1–0.7.4** — analyze perf (sparse digest), bounded cache memory,
-      dark-theme code highlighting, multi-cursor *selections* (Ctrl+D add-next-match)
+- [x] **0.7.1–0.7.5** — analyze perf (sparse digest), bounded cache memory,
+      dark-theme code highlighting, multi-cursor *selections* (Ctrl+D add-next-match),
+      `sred-typst` native rendered-math renderer
 
 ## Embedding (the reusable surface)
 

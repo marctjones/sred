@@ -3,6 +3,33 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.5] — 2026-06-07
+
+### Added — `sred-typst`: native rendered math/figures (#22)
+
+A new **optional** crate that fills `sred-core`'s fragment hook with the real
+Typst engine, so hosts get typeset math without the compiler ever entering the
+core's dependency tree:
+
+- `TypstRenderer::new()` loads the Typst standard library + embedded fonts
+  (`typst-kit`, no system-font scan, no network/package features) once; it's cheap
+  to clone (shared via `Arc`). `.into_hook()` produces the boxed closure for
+  `Editor::set_fragment_renderer`.
+- Each fragment compiles in a one-shot `World` (in-memory, self-contained — no
+  imports/files), rasterizes the auto-sized, transparent, margin-free page via
+  `typst-render`, and returns straight-alpha RGBA (`FragmentImage`). Garbage/empty
+  fragments return `None` rather than panicking.
+- The egui adapter's fragment overlay now scales the rendered image to the source
+  span height (so any `pixel_per_pt` displays at the text size).
+
+**Scope:** renders *Typst* math (the fragment source is treated as Typst markup)
+— exact for Typst documents; Markdown `$…$` (LaTeX-flavored) only for expressions
+that are also valid Typst. `sred-core` gains no new dependency; this crate is opt-in.
+
+Tests (`sred-typst`, 5): inline render → non-empty image with visible glyphs,
+display>inline, font-size scales the raster, garbage handled, and end-to-end
+through `Editor::set_fragment_renderer` + `render_fragment`.
+
 ## [0.7.4] — 2026-06-07
 
 ### Added — multi-cursor selections + "add caret at next match" (#23)
