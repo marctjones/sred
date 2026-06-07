@@ -3,6 +3,33 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.0] — 2026-06-07
+
+**Milestone: general-purpose editor-component hardening.** Rolls up the
+`0.7.0-alpha.*` line into a stable release. Together with 0.4.0–0.6.0, sred is now
+a genuinely reusable Rust text-editor component — not just Noet's Markdown/Typst
+editor. Byte fidelity, Live Preview, and the per-line keystroke cost are intact;
+clippy is clean and `cargo fmt` normalized.
+
+Highlights since 0.6.0 (see the `alpha.*` entries below for detail):
+- **Rendered math/figure fragments** — detection (`math_fragments`), a host
+  renderer hook + cache (`set_fragment_renderer`/`render_fragment`), and overlay
+  geometry (`rect_for_range`); wired end-to-end in the egui adapter. No compiler
+  bundled (the host supplies one, by design).
+- **Multiple-cursor rendering** — `FrameOut.carets`; egui draws all carets (+
+  Alt+click to add) and the Slint component draws them via a `CaretBox` repeater.
+- **Slint host fixes** — relayout no longer recurses (`Recursion detected`); an
+  accessibility shadow exposes the document to screen readers.
+- **List editing** — Tab/Shift-Tab indent/outdent.
+
+### Stability
+- `cargo fmt` clean; zero clippy warnings (`cargo clippy --workspace --all-targets`).
+- 129 tests green in debug **and** release; 115 green with `--features
+  syntax-highlight`.
+- Per-keystroke cost at 10–2000 lines matches the v0.3.0 baseline (no algorithmic
+  regression in the hot path). The whole-document re-parse at 4000+ lines is the
+  next perf target — see the per-block analyze-cache follow-up.
+
 ## [0.7.0-alpha.3] — 2026-06-07
 
 ### Added — offset/range geometry; multi-cursor rendering (#17); fragment overlay (#15)
