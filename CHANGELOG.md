@@ -3,6 +3,28 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.4] — 2026-06-07
+
+### Added — multi-cursor selections + "add caret at next match" (#23)
+
+Multi-cursor was point-carets only; now each caret can carry a selection:
+
+- Secondary carets are `(cursor, anchor)` pairs — a selection per caret, not just
+  a point. Typing replaces every selection in one undoable transaction; Backspace
+  deletes them all (`multi_edit` applies left-to-right with a running offset shift,
+  so positions stay valid). Single-caret editing is untouched.
+- `Command::AddCaretNextMatch` (Ctrl+D): with no selection it selects the word
+  under the caret; thereafter each press adds a caret at the next occurrence of the
+  selected text (wrapping, skipping ones already selected). Wired in both adapters
+  — egui (Ctrl+D) and the Slint host (Ctrl+D chord) — a portable gesture that
+  doesn't need pointer modifiers.
+- Secondary selections render via the decoration channel (selection-colored
+  chips); the caret bars already render (0.7.0). `EditorCore::extra_selections()`
+  exposes them.
+
+Tests: `tests/multicursor.rs` (7) — Ctrl+D select-word-then-next, replace-all,
+backspace-all, point carets, motion-collapse, wrap/exhaust, and byte-lossless undo.
+
 ## [0.7.3] — 2026-06-07
 
 ### Fixed — fenced-code highlight theme follows the host light/dark (#21)

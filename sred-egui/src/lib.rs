@@ -133,6 +133,7 @@ impl SredWidget {
                 Command::Indent
             }),
             Key::A if doc => self.editor.apply(Command::SelectAll),
+            Key::D if doc => self.editor.apply(Command::AddCaretNextMatch),
             Key::Z if doc => self
                 .editor
                 .apply(if shift { Command::Redo } else { Command::Undo }),

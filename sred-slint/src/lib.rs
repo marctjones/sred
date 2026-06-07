@@ -130,6 +130,10 @@ fn run_named(c: &mut Controller, name: &str) -> bool {
             c.core.apply(Command::SelectAll);
             true
         }
+        "addcaret" => {
+            c.core.apply(Command::AddCaretNextMatch);
+            true
+        }
         "openlink" => {
             if let Some(url) = c.core.link_at_cursor() {
                 let _ = open::that(url);
@@ -264,6 +268,7 @@ fn build_window(initial: &str, format: Format) -> Result<MainWindow, slint::Plat
                 "x" => "cut",
                 "v" => "paste",
                 "a" => "selectall",
+                "d" => "addcaret",
                 "k" => "link",
                 _ => return false,
             };

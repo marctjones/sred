@@ -118,6 +118,8 @@ manual via `cargo run -p sred-demo`.
 - [x] **0.7.0** — rendered math/figure fragments (detection + host renderer hook +
       overlay geometry; end-to-end in the egui adapter), multi-cursor rendering,
       list indent/outdent, Slint relayout fix + accessibility shadow
+- [x] **0.7.1–0.7.4** — analyze perf (sparse digest), bounded cache memory,
+      dark-theme code highlighting, multi-cursor *selections* (Ctrl+D add-next-match)
 
 ## Embedding (the reusable surface)
 

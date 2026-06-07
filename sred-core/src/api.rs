@@ -509,9 +509,14 @@ impl Editor {
             .caret_rects(&spans, text, &deltas, self.width, &self.theme, &offsets)
     }
 
-    /// Misspelling squiggle + search-highlight decorations for the current text.
+    /// Misspelling squiggle + search-highlight + secondary-selection decorations.
     fn aux_decorations(&mut self, text: &str) -> Vec<(usize, usize, Decoration)> {
         let mut out = Vec::new();
+        // Secondary multi-cursor selections, highlighted like the primary one
+        // (the primary selection is drawn by the renderer's selection pass).
+        for (s, e) in self.core.extra_selections() {
+            out.push((s, e, Decoration::Chip(self.theme.selection)));
+        }
         // Search highlights: pale chip for matches, selection color for the current.
         for (i, &(s, e)) in self.search_hits.iter().enumerate() {
             let color = if Some(i) == self.search_current {

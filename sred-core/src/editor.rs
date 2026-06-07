@@ -95,6 +95,9 @@ pub enum Command {
     Indent,
     /// Outdent the selected lines by one level (Shift+Tab).
     Outdent,
+    /// Add a caret at the next occurrence of the selection (Ctrl+D); with no
+    /// selection, first select the word under the caret.
+    AddCaretNextMatch,
     Undo,
     Redo,
 }
@@ -139,9 +142,11 @@ pub struct EditorCore {
     last_kind: EditKind,
     preedit: Option<Preedit>,
     auto_pairs: bool,
-    /// Secondary caret positions (the primary is `cursor`). Insert / backspace
-    /// apply at all carets in one transaction; any other command collapses them.
-    extra_carets: Vec<usize>,
+    /// Secondary carets as `(cursor, anchor)` (the primary is `cursor`/`anchor`).
+    /// `cursor == anchor` is a point caret; otherwise it carries a selection.
+    /// Insert / backspace apply at every caret (replacing each selection) in one
+    /// transaction; any other command (except add-caret) collapses them.
+    extra_carets: Vec<(usize, usize)>,
 }
 
 /// Auto-pair table: opener → closer. Same-char entries (quotes/backtick) pair too.
@@ -170,11 +175,11 @@ impl EditorCore {
 
     // ---- multiple cursors ---------------------------------------------------
 
-    /// Add a secondary caret at `idx` (no-op if it coincides with an existing one).
+    /// Add a secondary point caret at `idx` (no-op if it coincides with one).
     pub fn add_caret(&mut self, idx: usize) {
         let idx = idx.min(self.len());
-        if idx != self.cursor && !self.extra_carets.contains(&idx) {
-            self.extra_carets.push(idx);
+        if idx != self.cursor && !self.extra_carets.iter().any(|&(c, _)| c == idx) {
+            self.extra_carets.push((idx, idx));
         }
     }
 
@@ -189,56 +194,111 @@ impl EditorCore {
 
     /// All caret positions (primary + secondaries), sorted — for the host to draw.
     pub fn carets(&self) -> Vec<usize> {
-        let mut v = self.extra_carets.clone();
+        let mut v: Vec<usize> = self.extra_carets.iter().map(|&(c, _)| c).collect();
         v.push(self.cursor);
         v.sort_unstable();
         v.dedup();
         v
     }
 
-    /// Insert `s` at every caret in one undoable transaction (multi-cursor type).
-    fn multi_insert(&mut self, s: &str) {
-        let clean: String = s
-            .chars()
-            .filter(|c| *c == '\n' || (!c.is_control() && !is_private_use(*c)))
-            .collect();
-        if clean.is_empty() {
-            return;
+    /// Non-empty selections of the *secondary* carets (normalized `(start, end)`),
+    /// for the host to highlight. The primary selection is drawn via `selection()`.
+    pub fn extra_selections(&self) -> Vec<(usize, usize)> {
+        self.extra_carets
+            .iter()
+            .filter(|&&(c, a)| c != a)
+            .map(|&(c, a)| (c.min(a), c.max(a)))
+            .collect()
+    }
+
+    /// Normalized `(start, end)` edit regions for every caret (primary + extras),
+    /// sorted by start. A point caret yields an empty `(p, p)` region.
+    fn caret_regions(&self) -> Vec<(usize, usize)> {
+        let mut r = Vec::with_capacity(self.extra_carets.len() + 1);
+        let (ps, pe) = self.selection_range().unwrap_or((self.cursor, self.cursor));
+        r.push((ps, pe));
+        for &(c, a) in &self.extra_carets {
+            r.push((c.min(a), c.max(a)));
         }
-        let len = clean.chars().count();
-        let mut pos = self.carets(); // ascending, deduped
-                                     // Insert right-to-left so earlier offsets stay valid.
-        for &p in pos.iter().rev() {
-            self.rope.insert(p, &clean);
+        r.sort_by_key(|x| x.0);
+        r.dedup();
+        r
+    }
+
+    /// Apply one multi-caret edit transaction: at every caret region, remove it
+    /// (its selection, or `back` chars before a point caret) and insert `clean`.
+    /// Left-to-right with a running offset shift keeps positions valid. Carets
+    /// collapse to point carets at each edit's end.
+    fn multi_edit(&mut self, clean: &str, back: usize) {
+        let tlen = clean.chars().count();
+        let regions = self.caret_regions();
+        let mut shift: isize = 0;
+        let mut carets: Vec<usize> = Vec::with_capacity(regions.len());
+        for (s, e) in regions {
+            let (mut rs, re) = (s, e);
+            if rs == re {
+                // Point caret: delete `back` chars before it (backspace), else nothing.
+                rs = rs.saturating_sub(back);
+            }
+            let rs2 = (rs as isize + shift) as usize;
+            let re2 = (re as isize + shift) as usize;
+            self.rope.remove(rs2..re2);
+            self.rope.insert(rs2, clean);
+            carets.push(rs2 + tlen);
+            shift += tlen as isize - (re - rs) as isize;
         }
-        // Caret i (ascending) ends after its own insert plus the i inserts before it.
-        for (i, p) in pos.iter_mut().enumerate() {
-            *p += (i + 1) * len;
+        if let Some((&last, rest)) = carets.split_last() {
+            self.cursor = last;
+            self.extra_carets = rest.iter().map(|&c| (c, c)).collect();
         }
-        self.cursor = *pos.last().unwrap();
-        pos.pop();
-        self.extra_carets = pos;
         self.anchor = None;
     }
 
-    /// Backspace at every caret in one undoable transaction.
-    fn multi_delete_backward(&mut self) {
-        let mut pos = self.carets();
-        pos.retain(|&p| p > 0);
-        if pos.is_empty() {
+    /// Add a caret at the next occurrence of the current selection (à la Ctrl+D).
+    /// With no selection, first select the word under the caret.
+    fn add_caret_next_match(&mut self) {
+        let term = match self.selection_range() {
+            None => {
+                let (s, e) = self.word_range(self.cursor);
+                if s != e {
+                    self.anchor = Some(s);
+                    self.cursor = e;
+                }
+                return;
+            }
+            Some((s, e)) => self.rope.slice(s..e).to_string(),
+        };
+        if term.is_empty() {
             return;
         }
-        for &p in pos.iter().rev() {
-            self.rope.remove(p - 1..p);
+        let opts = SearchOpts {
+            case_sensitive: true,
+            whole_word: false,
+        };
+        let matches = self.find_all(&term, opts);
+        let mut existing: Vec<(usize, usize)> = self
+            .extra_carets
+            .iter()
+            .map(|&(c, a)| (c.min(a), c.max(a)))
+            .collect();
+        if let Some(sel) = self.selection_range() {
+            existing.push(sel);
         }
-        // Caret i (ascending) shifts left by the i+1 deletions at/before it.
-        for (i, p) in pos.iter_mut().enumerate() {
-            *p = p.saturating_sub(i + 1);
+        let from = self
+            .selection_range()
+            .map(|(_, e)| e)
+            .unwrap_or(self.cursor);
+        let fresh: Vec<(usize, usize)> = matches
+            .into_iter()
+            .filter(|m| !existing.contains(m))
+            .collect();
+        let next = fresh
+            .iter()
+            .find(|(s, _)| *s >= from)
+            .or_else(|| fresh.first());
+        if let Some(&(s, e)) = next {
+            self.extra_carets.push((e, s)); // cursor at end, anchor at start
         }
-        self.cursor = *pos.last().unwrap();
-        pos.pop();
-        self.extra_carets = pos;
-        self.anchor = None;
     }
 
     /// Load source text verbatim (byte-lossless).
@@ -606,18 +666,29 @@ impl EditorCore {
     pub fn apply(&mut self, cmd: Command) {
         // Any committed command cancels an in-flight composition.
         self.preedit = None;
+        // Add-caret extends the caret set (must run before the collapse below).
+        if let Command::AddCaretNextMatch = cmd {
+            self.add_caret_next_match();
+            return;
+        }
         // Multi-caret edits stay multi only for Insert/Backspace; anything else
         // collapses back to the primary caret.
         if !self.extra_carets.is_empty() {
             match &cmd {
                 Command::Insert(s) if s != "\n" => {
-                    self.checkpoint(EditKind::InsertBoundary);
-                    self.multi_insert(s);
+                    let clean: String = s
+                        .chars()
+                        .filter(|c| !c.is_control() && !is_private_use(*c))
+                        .collect();
+                    if !clean.is_empty() {
+                        self.checkpoint(EditKind::InsertBoundary);
+                        self.multi_edit(&clean, 0);
+                    }
                     return;
                 }
                 Command::DeleteBackward => {
                     self.checkpoint(EditKind::Delete);
-                    self.multi_delete_backward();
+                    self.multi_edit("", 1);
                     return;
                 }
                 _ => self.extra_carets.clear(),
@@ -708,6 +779,7 @@ impl EditorCore {
                 self.checkpoint(EditKind::Structure);
                 self.indent_lines(false);
             }
+            Command::AddCaretNextMatch => unreachable!("handled before the collapse"),
             Command::Undo => self.undo(),
             Command::Redo => self.redo(),
         }
