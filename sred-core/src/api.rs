@@ -71,6 +71,11 @@ pub struct Editor {
     /// plus a cache so an unchanged fragment isn't recompiled.
     fragment_renderer: Option<Box<dyn Fn(&str, bool, f32) -> Option<FragmentImage>>>,
     fragment_cache: std::collections::HashMap<(String, bool, u32), Option<FragmentImage>>,
+    /// When set, [`render_view`](Self::render_view) composites registered fragment
+    /// images into the frame it returns (so the host doesn't re-implement the
+    /// overlay blit). Off by default — hosts that draw fragments themselves
+    /// (e.g. GPU textures in `sred-egui`) leave it off. See [`set_fragment_overlay`].
+    fragment_overlay: bool,
 }
 
 /// An RGBA image a host renders for a math/figure fragment (e.g. via the Typst
@@ -80,6 +85,77 @@ pub struct FragmentImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+}
+
+/// Alpha-blend a fragment image into the frame at `(dx, dy)`, resized to `tw × th`
+/// with bilinear sampling (math is downscaled from a high-res raster, so
+/// nearest-neighbor would alias). The frame stays opaque (it's the editor bg).
+/// This is the exact overlay a host previously ran itself; centralized for #24.
+fn blit_fragment(
+    frame: &mut [u8],
+    fw: u32,
+    fh: u32,
+    img: &FragmentImage,
+    dx: f32,
+    dy: f32,
+    tw: f32,
+    th: f32,
+) {
+    if tw < 1.0 || th < 1.0 {
+        return;
+    }
+    let (dx0, dy0) = (dx.round() as i32, dy.round() as i32);
+    let (tw_i, th_i) = (tw.round() as i32, th.round() as i32);
+    for ty in 0..th_i {
+        let oy = dy0 + ty;
+        if oy < 0 || oy >= fh as i32 {
+            continue;
+        }
+        let sy = ((ty as f32 + 0.5) / th) * img.height as f32 - 0.5;
+        for tx in 0..tw_i {
+            let ox = dx0 + tx;
+            if ox < 0 || ox >= fw as i32 {
+                continue;
+            }
+            let sx = ((tx as f32 + 0.5) / tw) * img.width as f32 - 0.5;
+            let [sr, sg, sb, sa] = sample_bilinear(img, sx, sy);
+            if sa == 0 {
+                continue;
+            }
+            let di = ((oy as usize) * (fw as usize) + ox as usize) * 4;
+            let a = sa as f32 / 255.0;
+            frame[di] = (sr as f32 * a + frame[di] as f32 * (1.0 - a)).round() as u8;
+            frame[di + 1] = (sg as f32 * a + frame[di + 1] as f32 * (1.0 - a)).round() as u8;
+            frame[di + 2] = (sb as f32 * a + frame[di + 2] as f32 * (1.0 - a)).round() as u8;
+            frame[di + 3] = 255;
+        }
+    }
+}
+
+/// Bilinear sample of a fragment image at fractional `(x, y)` → RGBA.
+fn sample_bilinear(img: &FragmentImage, x: f32, y: f32) -> [u8; 4] {
+    let x = x.clamp(0.0, (img.width - 1) as f32);
+    let y = y.clamp(0.0, (img.height - 1) as f32);
+    let (x0, y0) = (x.floor() as u32, y.floor() as u32);
+    let (x1, y1) = ((x0 + 1).min(img.width - 1), (y0 + 1).min(img.height - 1));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let px = |xx: u32, yy: u32| -> [u8; 4] {
+        let i = ((yy * img.width + xx) * 4) as usize;
+        [
+            img.rgba[i],
+            img.rgba[i + 1],
+            img.rgba[i + 2],
+            img.rgba[i + 3],
+        ]
+    };
+    let (p00, p10, p01, p11) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
+    let mut out = [0u8; 4];
+    for c in 0..4 {
+        let top = p00[c] as f32 + (p10[c] as f32 - p00[c] as f32) * fx;
+        let bot = p01[c] as f32 + (p11[c] as f32 - p01[c] as f32) * fx;
+        out[c] = (top + (bot - top) * fy).round().clamp(0.0, 255.0) as u8;
+    }
+    out
 }
 
 /// Whether the host background is dark (Rec. 601 luma < 50%), so fenced-code
@@ -115,6 +191,7 @@ impl Editor {
             search_current: None,
             fragment_renderer: None,
             fragment_cache: std::collections::HashMap::new(),
+            fragment_overlay: false,
         }
     }
 
@@ -481,6 +558,66 @@ impl Editor {
         img
     }
 
+    /// Opt in to having [`render_view`](Self::render_view) composite the registered
+    /// fragments directly into the frame it returns, over each fragment's source
+    /// span — instead of the host running its own overlay loop (`math_fragments` →
+    /// `render_fragment` → `rect_for_range` → blit). The composite is
+    /// pixel-identical to that manual loop (bilinear downscale to the line height,
+    /// aspect preserved, alpha-blended over the opaque frame), so a host can switch
+    /// on the flag and delete its blitting code with no visual change.
+    ///
+    /// Off by default (no behavior change). Only takes effect when a renderer is
+    /// registered via [`set_fragment_renderer`](Self::set_fragment_renderer). A
+    /// math-free note is cheap to skip — the overlay early-outs on a single `$`
+    /// byte scan before any parsing — so a host can leave this on unconditionally
+    /// and delete its own "does this note have math?" gate. Hosts that paint
+    /// fragments themselves (e.g. GPU textures) should leave this off.
+    pub fn set_fragment_overlay(&mut self, on: bool) {
+        self.fragment_overlay = on;
+    }
+
+    /// Composite the registered fragments into `rgba` (a `fw × fh` frame) at their
+    /// source-span rects, in the same coordinate space as [`render_view`]'s frame.
+    /// `scroll_y` is the *resolved* scroll of the rendered frame. Spans/deltas are
+    /// computed once and shared across all fragments (cheaper than per-fragment
+    /// `rect_for_range`).
+    fn composite_fragments(&mut self, rgba: &mut [u8], fw: u32, fh: u32, scroll_y: f32) {
+        let text = self.core.display_text();
+        // Fast path: math in both Markdown and Typst is `$`-delimited, so a note
+        // with no `$` has no fragments. This skips the O(doc) parse on math-free
+        // notes for the cost of one byte scan — so a host can drop its own
+        // "does this note contain math?" gate and just leave the overlay on.
+        if !text.contains('$') {
+            return;
+        }
+        let frags = crate::view::math_fragments(&text, self.core.format());
+        if frags.is_empty() {
+            return;
+        }
+        let (spans, deltas) = self.styled_with(&text);
+        for frag in &frags {
+            let Some(img) = self.render_fragment(frag) else {
+                continue;
+            };
+            if img.width == 0 || img.height == 0 || img.rgba.is_empty() {
+                continue;
+            }
+            let aspect = img.width as f32 / img.height.max(1) as f32;
+            let rects = self.renderer.range_rects(
+                &spans,
+                &text,
+                &deltas,
+                self.width,
+                &self.theme,
+                frag.start,
+                frag.end,
+            );
+            for (x, y, _w, h) in rects {
+                blit_fragment(rgba, fw, fh, &img, x, y - scroll_y, h * aspect, h);
+            }
+        }
+    }
+
     /// Screen-space rects covering a char range `[start, end)`, in the same
     /// coordinates as [`render_view`](Self::render_view)'s frame/caret (viewport
     /// relative, scroll already subtracted) — one rect per visual line. Use it to
@@ -644,7 +781,7 @@ impl Editor {
         let cursor = self.core.display_cursor();
         let selection = self.core.selection();
 
-        let out = self.renderer.render_viewport(
+        let mut out = self.renderer.render_viewport(
             &spans,
             &text,
             &deltas,
@@ -658,6 +795,14 @@ impl Editor {
             selection,
         );
         self.scroll_y = out.scroll_y;
+        // Opt-in: draw registered math/figure fragments into the frame so the host
+        // doesn't run its own overlay blit (#24). Only when enabled, a renderer is
+        // set, and the doc has fragments — math-free notes cost nothing.
+        if self.fragment_overlay && self.has_fragment_renderer() {
+            let (fw, fh) = (out.frame.width, out.frame.height);
+            let sy = out.scroll_y;
+            self.composite_fragments(&mut out.frame.rgba, fw, fh, sy);
+        }
         // Multi-cursor: extra caret rects, viewport-relative (scroll subtracted),
         // matching `out.caret`.
         let carets = if self.core.has_multi_carets() {
