@@ -111,3 +111,60 @@ Branch → implement → all gates green (debug + `--release` + `--features
 syntax-highlight`) → fmt + clippy clean → bump version + CHANGELOG + README →
 commit → tag → push `main` → `gh release create` → `gh issue close 19`.
 Credentials/`gh` are already configured (see the `local-credentials` skill).
+
+---
+
+## 8. Spike result (2026-06-08) — measured, then reverted. **Recommendation: no-go.**
+
+The design was prototyped end-to-end on a throwaway branch (`issue-19-spike`,
+since deleted; `main` untouched): a full per-line `Rc<LineSpans>` path added
+*alongside* the flat one (`styled_lines_with`, `render_view_lines`,
+`build_buffer_cached_lines` with `Rc`-pointer-identity line diffing), plus a
+byte-identity parity gate and a flat-vs-lines caret-move probe.
+
+**1. Safety — provable.** A parity harness drove identical command streams
+(caret moves, inserts, Enter, Backspace) through both paths and asserted
+pixel-for-pixel + caret + `doc_height` equality across Markdown, Typst, empty/
+tiny docs, and the trailing-hidden-marker edge. All green. The contract change
+*can* be made byte-identical.
+
+**2. Speed — real but only a constant factor; the headline deliverable is NOT met.**
+Caret-move floor, `--release`, this machine:
+
+| doc lines | flat (today) | #19 lines path | speedup |
+|-----------|-------------:|---------------:|--------:|
+| 500       |     1546 µs  |      1451 µs   |  1.07×  |
+| 2000      |     5628 µs  |      2649 µs   |  2.12×  |
+| 4000      |     9439 µs  |      5256 µs   |  1.80×  |
+| 8000      |    31418 µs  |     11460 µs   |  2.74×  |
+
+The lines path is ~2× faster at scale but **still scales linearly** (2000→2649,
+4000→5256 ≈ 2× for 2× lines). §5's acceptance gate — *"caret-move/scroll cost no
+longer scales with total line count"* — is **not achieved**, and cannot be by the
+styling contract change alone. The floor has several independent O(doc) passes;
+this change only attacks one (the per-line string clone out of `PROJECT_CACHE` +
+the `split_lines` re-hash). Still O(doc) and untouched:
+
+- `layout.rs::doc_height` folds over **every** layout run, every render.
+- `layout.rs::caret_geom` scans runs from the top to the caret line.
+- the per-line assembly loop + pointer vector in the cached builder.
+
+`doc_height` alone keeps render O(doc) no matter how perfect styling becomes. True
+flat scaling needs incremental height + caret geometry too — a much larger surgery
+than this issue scopes.
+
+**3. Quality — net-neutral-to-negative.** `set_rich_text` and `split_lines`
+disagree on line count for docs ending in a hidden-marker line (heading/fence/
+quote as the final line); the flat path papers over this with a defensive
+full-rebuild. The lines path had to reverse-engineer and replicate that exactly
+(`diff_line_slice` for diff signatures while the full build keeps all groups) — it
+works, but it's a latent trap, and those same docs get **zero** speedup (both
+paths full-rebuild every render). Against the maintainer's "unambiguously better
+in speed *and* code quality" bar, this fails: a partial speed win that misses its
+own gate, plus added `Rc` indirection, an API break to 0.8.0, and new fragility on
+the riskiest invariant in the repo.
+
+**Verdict:** reverted, no release. If sub-frame feel at 8k+ lines ever becomes a
+real need, the correct fix is the broader one (incremental `doc_height` + caret
+geometry + viewport-bounded styling together), not this styling contract change in
+isolation. Until then #19 stays open but de-prioritized.
