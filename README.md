@@ -122,6 +122,8 @@ manual via `cargo run -p sred-demo`.
 - [x] **0.7.1–0.7.5** — analyze perf (sparse digest), bounded cache memory,
       dark-theme code highlighting, multi-cursor *selections* (Ctrl+D add-next-match),
       `sred-typst` native rendered-math renderer
+- [x] **0.7.6** — opt-in built-in math/figure fragment compositing
+      (`set_fragment_overlay`, so a host drops its own overlay blit)
 
 ## Embedding (the reusable surface)
 

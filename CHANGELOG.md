@@ -3,7 +3,7 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
-## [Unreleased]
+## [0.7.6] — 2026-06-08
 
 ### Added — built-in math/figure fragment compositing (#24)
 
