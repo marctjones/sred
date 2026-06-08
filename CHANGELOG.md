@@ -3,6 +3,31 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [Unreleased]
+
+### Added — built-in math/figure fragment compositing (#24)
+
+`Editor::set_fragment_overlay(true)` makes `render_view` draw the registered
+fragment images directly into the frame it returns, over each fragment's source
+span — so an embedding host no longer maintains its own overlay loop
+(`math_fragments` → `render_fragment` → `rect_for_range` → bilinear blit). The
+composite is **pixel-identical** to that manual loop (downscale to the line height,
+aspect preserved, alpha-blended over the opaque frame), so a host flips the flag
+and deletes its blit code with no visual change. Spans/rects are computed once for
+all fragments (cheaper than per-fragment `rect_for_range`).
+
+- **Opt-in, non-breaking:** off by default; `render_view` is byte-identical until
+  enabled. A math-free note early-outs on a single `$` byte scan before any
+  parsing, so a host can leave the overlay on unconditionally and delete its own
+  "does this note have math?" gate. Hosts that paint fragments themselves (e.g.
+  `sred-egui`'s GPU textures) leave it off.
+- Tests (`tests/fragment_overlay.rs`, 4): built-in overlay == a manual host
+  composite via the public API (pixel-identical, the property a switching host
+  relies on); off-by-default unchanged; no-ops without math / without a renderer.
+
+This removes ~70 lines of correctness-sensitive pixel code from Noet's editor glue
+and centralizes the one correct implementation.
+
 ## [0.7.5] — 2026-06-07
 
 ### Added — `sred-typst`: native rendered math/figures (#22)
