@@ -24,7 +24,9 @@ pub mod model;
 pub mod typst_fmt;
 pub mod view;
 
-pub use api::{Editor, FrameOut};
+pub use api::{
+    normalize_chord_key, standard_command_for_chord, ClipboardOp, CommandOutcome, Editor, FrameOut,
+};
 pub use editor::{BlockKind, Command, Decoration, EditorCore, Motion, Span};
 pub use format::{backend_for, Caps, DocumentFormat, FormatError};
 pub use layout::{Frame, RenderOut, TextRenderer, Theme, ViewOut};

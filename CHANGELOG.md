@@ -3,6 +3,27 @@
 All notable changes to sred. Versions follow the milestones in `docs/ROADMAP.md`
 (target: **0.2.0** = usable as the primary editor for [Noet](../notes)).
 
+## [0.7.7] — 2026-06-11
+
+### Added — host-facing standard editor commands
+
+`sred-core::Editor` now has `command(name, clipboard_text) -> CommandOutcome`
+for the standard editor actions hosts otherwise reimplement in their UI glue:
+select all, copy, cut, paste, movement, Shift+movement selection, word/document
+motions, undo/redo, indentation, and formatting commands. Clipboard transport
+stays host-owned through `ClipboardOp::{SetText, RequestPaste}`, keeping the core
+UI-free while giving Noet-style embedders one dispatch path for keyboard, menu,
+toolbar, and command-palette actions.
+
+Also added `Editor::select_vertical(down)` for Shift+Up/Shift+Down selection, so
+hosts no longer need to reach through `core_mut()` to preserve the anchor around
+layout-aware vertical movement.
+
+`normalize_chord_key` and `standard_command_for_chord` move the repeated
+Ctrl/Cmd key normalization and editor shortcut mapping into `sred-core`, so hosts
+such as Noet can intercept app-global shortcuts first and then delegate editor
+shortcuts without copying `sred-slint` helper code.
+
 ## [0.7.6] — 2026-06-08
 
 ### Added — built-in math/figure fragment compositing (#24)

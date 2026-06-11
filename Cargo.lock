@@ -5464,7 +5464,7 @@ dependencies = [
 
 [[package]]
 name = "sred-core"
-version = "0.7.6"
+version = "0.7.7"
 dependencies = [
  "bitflags 2.12.1",
  "cosmic-text",
@@ -5477,7 +5477,7 @@ dependencies = [
 
 [[package]]
 name = "sred-demo"
-version = "0.7.6"
+version = "0.7.7"
 dependencies = [
  "slint",
  "sred-slint",
@@ -5485,7 +5485,7 @@ dependencies = [
 
 [[package]]
 name = "sred-egui"
-version = "0.7.6"
+version = "0.7.7"
 dependencies = [
  "egui",
  "sred-core",
@@ -5493,7 +5493,7 @@ dependencies = [
 
 [[package]]
 name = "sred-slint"
-version = "0.7.6"
+version = "0.7.7"
 dependencies = [
  "arboard",
  "i-slint-backend-testing",
@@ -5505,7 +5505,7 @@ dependencies = [
 
 [[package]]
 name = "sred-typst"
-version = "0.7.6"
+version = "0.7.7"
 dependencies = [
  "sred-core",
  "tiny-skia 0.11.4",

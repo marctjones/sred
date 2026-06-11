@@ -18,9 +18,9 @@
 //! // persist with ed.text() — byte-lossless.
 //! ```
 
-use crate::editor::{Command, EditorCore};
+use crate::editor::{BlockKind, Command, EditorCore, Motion};
 use crate::layout::{Caret, Frame, TextRenderer, Theme};
-use crate::model::Format;
+use crate::model::{Format, MarkSet};
 use crate::view::{Decoration, Span, TokenSpec};
 
 /// One render's output for the host to display.
@@ -36,6 +36,93 @@ pub struct FrameOut {
     pub scroll_y: f32,
     /// Document height in px (for the scroll container / scrollbar).
     pub doc_height: u32,
+}
+
+/// Clipboard work requested by a host-facing editor command.
+///
+/// `sred-core` stays UI- and platform-free, so the host still owns the system
+/// clipboard. This enum lets standard commands such as copy/cut/paste flow
+/// through one editor API while keeping OS clipboard transport outside the core.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardOp {
+    None,
+    SetText(String),
+    RequestPaste,
+}
+
+/// Result of [`Editor::command`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandOutcome {
+    pub handled: bool,
+    pub changed: bool,
+    pub clipboard: ClipboardOp,
+}
+
+impl CommandOutcome {
+    fn ignored() -> Self {
+        Self {
+            handled: false,
+            changed: false,
+            clipboard: ClipboardOp::None,
+        }
+    }
+
+    fn handled(changed: bool) -> Self {
+        Self {
+            handled: true,
+            changed,
+            clipboard: ClipboardOp::None,
+        }
+    }
+
+    fn clipboard(clipboard: ClipboardOp, changed: bool) -> Self {
+        Self {
+            handled: true,
+            changed,
+            clipboard,
+        }
+    }
+}
+
+/// Normalize a toolkit-delivered Ctrl/Cmd chord key to a lowercase key name.
+///
+/// Some toolkits deliver Ctrl+A..Ctrl+Z as control characters U+0001..=U+001A
+/// instead of `"a"`..`"z"`. Hosts can use this before mapping a key chord to an
+/// editor command.
+pub fn normalize_chord_key(key: &str) -> String {
+    let mut chars = key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => {
+            let code = c as u32;
+            if (1..=26).contains(&code) {
+                ((b'a' + (code as u8 - 1)) as char).to_string()
+            } else {
+                c.to_lowercase().to_string()
+            }
+        }
+        _ => key.to_string(),
+    }
+}
+
+/// Map a normalized or raw Ctrl/Cmd chord key to a standard editor command name.
+///
+/// Host-global chords such as command palette or app search intentionally stay
+/// out of this map; embedders should intercept those first and then delegate to
+/// this helper for editor-local shortcuts.
+pub fn standard_command_for_chord(key: &str) -> Option<&'static str> {
+    match normalize_chord_key(key).as_str() {
+        "b" => Some("bold"),
+        "i" => Some("italic"),
+        "e" | "`" => Some("code"),
+        "z" => Some("undo"),
+        "y" => Some("redo"),
+        "c" => Some("copy"),
+        "x" => Some("cut"),
+        "v" => Some("paste"),
+        "a" => Some("selectall"),
+        "d" => Some("addcaret"),
+        _ => None,
+    }
 }
 
 /// A screen-space rectangle (e.g. where to overlay a rendered math fragment).
@@ -414,6 +501,19 @@ impl Editor {
         self.core.set_cursor(idx);
     }
 
+    /// Vertical selection extension (Shift+Up/Shift+Down).
+    ///
+    /// This mirrors [`move_vertical`](Self::move_vertical) but preserves the
+    /// original anchor, so embedders do not need to reach into [`EditorCore`] to
+    /// implement standard keyboard selection.
+    pub fn select_vertical(&mut self, down: bool) {
+        let anchor = self.core.carets().first().copied().unwrap_or(0);
+        self.move_vertical(down);
+        let target = self.core.carets().first().copied().unwrap_or(anchor);
+        self.core.set_cursor(anchor);
+        self.core.extend_to(target);
+    }
+
     /// Page up/down: move the caret by ~one viewport of lines (and let the next
     /// render's caret-follow scroll to it).
     pub fn page(&mut self, down: bool) {
@@ -437,6 +537,123 @@ impl Editor {
     /// Insert clipboard text at the caret (replaces any selection).
     pub fn paste(&mut self, text: &str) {
         self.core.paste(text);
+    }
+
+    /// Host-facing command dispatcher for common editor controls.
+    ///
+    /// Names are intentionally small, stable strings so Slint callbacks, menus,
+    /// command palettes, and other UI toolkits can share one dispatch path:
+    ///
+    /// - clipboard: `copy`, `cut`, `paste`
+    /// - selection/navigation: `selectall`, `left`, `right`, `up`, `down`,
+    ///   `home`, `end`, `select-left`, `select-right`, `select-up`,
+    ///   `select-down`, `select-home`, `select-end`, `page-up`, `page-down`
+    /// - editing: `backspace`, `delete`, `delete-word-backward`,
+    ///   `delete-word-forward`, `indent`, `outdent`, `undo`, `redo`
+    /// - formatting: `bold`, `italic`, `code`, `strike`, `paragraph`, `h1`,
+    ///   `h2`, `h3`, `bullet`, `ordered`, `quote`, `codeblock`, `divider`,
+    ///   `addcaret`
+    ///
+    /// For `paste`, pass `Some(text)` to insert immediately. Passing `None`
+    /// returns [`ClipboardOp::RequestPaste`] so the host can fetch the clipboard
+    /// asynchronously and call `command("paste", Some(text))` afterward.
+    pub fn command(&mut self, name: &str, clipboard_text: Option<&str>) -> CommandOutcome {
+        match name {
+            "copy" => {
+                let text = self.copy();
+                if text.is_empty() {
+                    CommandOutcome::handled(false)
+                } else {
+                    CommandOutcome::clipboard(ClipboardOp::SetText(text), false)
+                }
+            }
+            "cut" => {
+                let text = self.cut();
+                if text.is_empty() {
+                    CommandOutcome::handled(false)
+                } else {
+                    CommandOutcome::clipboard(ClipboardOp::SetText(text), true)
+                }
+            }
+            "paste" => {
+                if let Some(text) = clipboard_text {
+                    self.paste(text);
+                    CommandOutcome::handled(true)
+                } else {
+                    CommandOutcome::clipboard(ClipboardOp::RequestPaste, false)
+                }
+            }
+            "up" => {
+                self.move_vertical(false);
+                CommandOutcome::handled(false)
+            }
+            "down" => {
+                self.move_vertical(true);
+                CommandOutcome::handled(false)
+            }
+            "select-up" => {
+                self.select_vertical(false);
+                CommandOutcome::handled(false)
+            }
+            "select-down" => {
+                self.select_vertical(true);
+                CommandOutcome::handled(false)
+            }
+            "page-up" => {
+                self.page(false);
+                CommandOutcome::handled(false)
+            }
+            "page-down" => {
+                self.page(true);
+                CommandOutcome::handled(false)
+            }
+            other => {
+                let (cmd, changed) = match other {
+                    "backspace" => (Command::DeleteBackward, true),
+                    "delete" => (Command::DeleteForward, true),
+                    "delete-word-backward" => (Command::DeleteWordBackward, true),
+                    "delete-word-forward" => (Command::DeleteWordForward, true),
+                    "left" => (Command::Move(Motion::Left), false),
+                    "right" => (Command::Move(Motion::Right), false),
+                    "home" => (Command::Move(Motion::LineStart), false),
+                    "end" => (Command::Move(Motion::LineEnd), false),
+                    "word-left" => (Command::Move(Motion::WordLeft), false),
+                    "word-right" => (Command::Move(Motion::WordRight), false),
+                    "doc-start" => (Command::Move(Motion::DocStart), false),
+                    "doc-end" => (Command::Move(Motion::DocEnd), false),
+                    "select-left" => (Command::Select(Motion::Left), false),
+                    "select-right" => (Command::Select(Motion::Right), false),
+                    "select-home" => (Command::Select(Motion::LineStart), false),
+                    "select-end" => (Command::Select(Motion::LineEnd), false),
+                    "select-word-left" => (Command::Select(Motion::WordLeft), false),
+                    "select-word-right" => (Command::Select(Motion::WordRight), false),
+                    "select-doc-start" => (Command::Select(Motion::DocStart), false),
+                    "select-doc-end" => (Command::Select(Motion::DocEnd), false),
+                    "selectall" => (Command::SelectAll, false),
+                    "indent" => (Command::Indent, true),
+                    "outdent" => (Command::Outdent, true),
+                    "undo" => (Command::Undo, true),
+                    "redo" => (Command::Redo, true),
+                    "addcaret" => (Command::AddCaretNextMatch, false),
+                    "bold" => (Command::ToggleMark(MarkSet::BOLD), true),
+                    "italic" => (Command::ToggleMark(MarkSet::ITALIC), true),
+                    "code" => (Command::ToggleMark(MarkSet::CODE), true),
+                    "strike" => (Command::ToggleMark(MarkSet::STRIKE), true),
+                    "paragraph" => (Command::SetBlock(BlockKind::Paragraph), true),
+                    "h1" => (Command::ToggleBlock(BlockKind::Heading(1)), true),
+                    "h2" => (Command::ToggleBlock(BlockKind::Heading(2)), true),
+                    "h3" => (Command::ToggleBlock(BlockKind::Heading(3)), true),
+                    "bullet" => (Command::ToggleBlock(BlockKind::Bullet), true),
+                    "ordered" => (Command::ToggleBlock(BlockKind::Ordered), true),
+                    "quote" => (Command::ToggleBlock(BlockKind::Quote), true),
+                    "codeblock" => (Command::ToggleBlock(BlockKind::Code), true),
+                    "divider" => (Command::SetBlock(BlockKind::Divider), true),
+                    _ => return CommandOutcome::ignored(),
+                };
+                self.apply(cmd);
+                CommandOutcome::handled(changed)
+            }
+        }
     }
 
     // ---- IME / preedit (host forwards platform composition events) ----------

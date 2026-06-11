@@ -30,12 +30,14 @@ ed.set_viewport(width_px, height_px); // call again on resize
 
 // --- on input events, drive the editor, then render ---
 // key char:     ed.apply(Command::Insert("x".into()));
-// backspace:    ed.apply(Command::DeleteBackward);
-// arrows:       ed.apply(Command::Move(Motion::Left));  // up/down: ed.move_vertical(false/true)
-// toolbar bold: ed.apply(Command::ToggleMark(MarkSet::BOLD));   // TOGGLES: wraps the
-//   selection, or unwraps it if already bold. Route format buttons (bold/italic/
-//   code/strike, headings, lists) through ToggleMark/ToggleBlock — NOT by inserting
-//   literal "**…**" snippets, which can't un-toggle or wrap a selection.
+// standard UI:  ed.command("selectall", None);
+// clipboard:    ed.command("copy", None) / ed.command("cut", None)
+// paste:        ed.command("paste", Some(&clipboard_text))
+// arrows:       ed.command("left", None), ed.command("select-down", None), ...
+// toolbar bold: ed.command("bold", None);   // TOGGLES: wraps the selection, or
+//   unwraps it if already bold. Route format buttons (bold/italic/code/strike,
+//   headings, lists) through command names — NOT by inserting literal "**…**"
+//   snippets, which can't un-toggle or wrap a selection.
 // undo/redo UI: ed.can_undo() / ed.can_redo() → enable/disable the buttons.
 // click:        ed.click(x, y);   drag: ed.drag(x, y);   dbl: ed.double_click(x, y)
 //   ^ x,y are in DOCUMENT space (the full-frame coords a TouchArea inside a
@@ -50,6 +52,24 @@ let out = ed.render(/* follow caret = */ true);
 // persist — byte-lossless, exactly what the user typed:
 backend.save_note(id, title, ed.text());
 ```
+
+`Editor::command(name, clipboard_text)` is the preferred host adapter for normal
+editor controls. It centralizes the behavior every embedding app otherwise
+reimplements:
+
+| UI action | command |
+|---|---|
+| Ctrl/Cmd+A | `selectall` |
+| Ctrl/Cmd+C / X | `copy` / `cut` returning `ClipboardOp::SetText(text)` |
+| Ctrl/Cmd+V | `paste` with `Some(clipboard_text)`, or `None` to request a paste |
+| arrows / Shift+arrows | `left`, `right`, `up`, `down`, `select-left`, `select-right`, `select-up`, `select-down` |
+| Home/End variants | `home`, `end`, `doc-start`, `doc-end`, and `select-*` variants |
+| word movement/delete | `word-left`, `word-right`, `delete-word-backward`, `delete-word-forward` |
+| formatting | `bold`, `italic`, `code`, `strike`, `h1`, `h2`, `h3`, `bullet`, `ordered`, `quote`, `codeblock` |
+
+The host still decides how raw toolkit key events map to these command names and
+how to read/write the OS clipboard. `sred-core` owns the editor semantics once a
+command name reaches it, including Shift+Up/Shift+Down vertical selection.
 
 ### Slint specifics
 - Convert `out.frame` to an `Image`:

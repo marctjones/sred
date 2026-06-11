@@ -1,5 +1,7 @@
 //! Smoke test for the embeddable Editor facade (the Noet integration surface).
-use sred_core::{Command, Editor, Format, MarkSet};
+use sred_core::{
+    normalize_chord_key, standard_command_for_chord, ClipboardOp, Command, Editor, Format, MarkSet,
+};
 
 #[test]
 fn facade_drives_edit_render_and_is_lossless() {
@@ -109,4 +111,56 @@ fn token_chip_background_is_painted() {
         painted,
         "registered token chip background should be painted in the frame"
     );
+}
+
+#[test]
+fn facade_standard_commands_cover_clipboard_and_selection() {
+    let mut ed = Editor::from_source("hello world", Format::Markdown);
+
+    let out = ed.command("selectall", None);
+    assert!(out.handled);
+    assert!(!out.changed);
+    assert_eq!(ed.selected_text(), "hello world");
+
+    let out = ed.command("copy", None);
+    assert_eq!(out.clipboard, ClipboardOp::SetText("hello world".into()));
+    assert!(!out.changed);
+    assert_eq!(ed.text(), "hello world");
+
+    let out = ed.command("cut", None);
+    assert_eq!(out.clipboard, ClipboardOp::SetText("hello world".into()));
+    assert!(out.changed);
+    assert_eq!(ed.text(), "");
+
+    assert_eq!(
+        ed.command("paste", None).clipboard,
+        ClipboardOp::RequestPaste
+    );
+    let out = ed.command("paste", Some("replacement"));
+    assert!(out.handled);
+    assert!(out.changed);
+    assert_eq!(ed.text(), "replacement");
+}
+
+#[test]
+fn facade_standard_commands_cover_vertical_selection() {
+    let mut ed = Editor::from_source("alpha\nbeta\ngamma", Format::Markdown);
+    ed.set_viewport(400, 120.0);
+    ed.command("doc-start", None);
+    ed.command("select-down", None);
+
+    assert!(
+        !ed.selected_text().is_empty(),
+        "Shift+Down equivalent should extend selection through the facade"
+    );
+}
+
+#[test]
+fn facade_exposes_standard_chord_mapping_for_hosts() {
+    assert_eq!(normalize_chord_key("\u{3}"), "c");
+    assert_eq!(normalize_chord_key("B"), "b");
+    assert_eq!(standard_command_for_chord("\u{3}"), Some("copy"));
+    assert_eq!(standard_command_for_chord("X"), Some("cut"));
+    assert_eq!(standard_command_for_chord("d"), Some("addcaret"));
+    assert_eq!(standard_command_for_chord("k"), None);
 }
